@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "source_name": "Odoo Documentation",
+  "repository_url": "https://github.com/odoo/documentation.git",
+  "branch": "19.0",
+  "commit": "32a8b8d77833f22b4bc74ed4ea78b6a82b5338fd",
+  "commit_time": "2026-08-29T09:35:27Z",
+  "acquired_at": "2026-08-29T22:52:25.8988289Z",
+  "checkout_type": "git_sparse_clone",
+  "sparse_paths": [
+    "content",
+    "extensions",
+    "invs",
+    "redirects",
+    "static",
+    "tests"
+  ],
+  "license": "CC-BY-SA-4.0",
+  "license_file": "odoo-documentation-19.0/LICENSE",
+  "content_profile": {
+    "files": 5104,
+    "bytes": 129139359,
+    "rst_files": 1156
+  }
+}
