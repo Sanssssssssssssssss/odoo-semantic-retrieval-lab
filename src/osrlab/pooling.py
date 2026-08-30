@@ -11,6 +11,7 @@ from scipy.stats import kendalltau
 
 from .baselines import _read_approved_trec_run
 from .benchmark import SNAPSHOT_ID, load_jsonl
+from .contract import validate_record
 from .gates import require_approval
 from .jsonio import canonical_json, sha256_file, stable_id, write_json, write_jsonl
 from .paths import LabPaths
@@ -45,6 +46,284 @@ def _agent_pool_is_stable(depth_rows: list[dict[str, Any]]) -> bool:
         and row["leave_one_run_out_min_kendall_tau"] >= 0.95
         for row in depth_rows[-2:]
     )
+
+
+def _annotation_label(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        row["retrieval_grade"],
+        tuple(row["selected_source_span_ids"]),
+        tuple(row["selected_nugget_ids"]),
+    )
+
+
+def _negative_classes(candidate: dict[str, Any], query: dict[str, Any]) -> list[str]:
+    if query["no_answer_reason"] == "wrong_version":
+        return ["wrong_version"]
+    mapping = {
+        "wrong_module_candidate": "wrong_module",
+        "lexical_candidate": "lexical_collision",
+        "semantic_candidate": "semantic_nearest",
+        "hybrid_candidate": "baseline_false_positive",
+        "rerank_candidate": "baseline_false_positive",
+    }
+    return sorted({mapping[value] for value in candidate["provenance"] if value in mapping})
+
+
+def _reported_annotation_sha(report: dict[str, Any]) -> str | None:
+    return (
+        report.get("annotation_sha256")
+        or report.get("annotation_file_sha256")
+        or report.get("adjudicator_sha256")
+        or report.get("input_hashes", {}).get("annotation")
+        or next(
+            (
+                output.get("sha256")
+                for output in report.get("bound_outputs", [])
+                if output.get("path", "").endswith("/adjudicator.jsonl")
+            ),
+            None,
+        )
+    )
+
+
+def _write_adjudicated_review_outputs(
+    pool_root: Path,
+    annotation_sources: list[tuple[int, Path]],
+    candidates: dict[str, dict[str, Any]],
+    paths: LabPaths,
+) -> dict[str, str]:
+    if [depth for depth, _ in annotation_sources] != list(DEPTHS):
+        return {}
+    benchmark_root = paths.root / "benchmarks" / "seed50" / "provisional"
+    queries = {row["id"]: row for row in load_jsonl(benchmark_root / "queries.jsonl")}
+    all_rows = []
+    queue_by_id: dict[str, dict[str, Any]] = {}
+    agreed: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    annotation_hashes = {}
+    for depth, adjudicator_path in annotation_sources:
+        annotation_dir = adjudicator_path.parent
+        frontier_root = annotation_dir.parent
+        context_path = (
+            pool_root / "active_frontier_context.jsonl"
+            if depth == 20
+            else frontier_root / "context.jsonl"
+        )
+        contexts = {row["id"]: row for row in load_jsonl(context_path)}
+        files = {
+            "annotator_a": annotation_dir / "annotator_a.jsonl",
+            "annotator_b": annotation_dir / "annotator_b.jsonl",
+            "adjudicator": adjudicator_path,
+        }
+        annotations = {
+            name: {row["id"]: row for row in load_jsonl(path)}
+            for name, path in files.items()
+        }
+        annotation_hashes.update(
+            {
+                f"depth{depth}/{name}.jsonl": sha256_file(path)
+                for name, path in files.items()
+            }
+        )
+        for item_id in sorted(annotations["adjudicator"]):
+            a = annotations["annotator_a"][item_id]
+            b = annotations["annotator_b"][item_id]
+            adjudicated = annotations["adjudicator"][item_id]
+            candidate = candidates[item_id]
+            query = queries[adjudicated["query_id"]]
+            context = contexts[item_id]
+            row = {
+                "id": "human-review-" + stable_id(item_id),
+                "pool_item_id": item_id,
+                "depth": depth,
+                "query": query,
+                "candidate": candidate,
+                "context": context,
+                "annotator_a": a,
+                "annotator_b": b,
+                "adjudicator": adjudicated,
+                "selection_reasons": [],
+            }
+            all_rows.append(row)
+            if _annotation_label(a) != _annotation_label(b):
+                row["selection_reasons"].append("agent_disagreement")
+            if query["answerability"] == "no_answer":
+                row["selection_reasons"].append("no_answer")
+            if row["selection_reasons"]:
+                queue_by_id[item_id] = row
+            elif query["answerability"] == "answerable":
+                agreed[(adjudicated["retrieval_grade"], query["intent"])].append(row)
+
+    sampled = 0
+    strata = {key: sorted(rows, key=lambda row: row["pool_item_id"]) for key, rows in agreed.items()}
+    while sampled < 15 and any(strata.values()):
+        for key in sorted(strata):
+            if sampled >= 15:
+                break
+            if strata[key]:
+                row = strata[key].pop(0)
+                row["selection_reasons"].append("stratified_agreement_sample")
+                queue_by_id[row["pool_item_id"]] = row
+                sampled += 1
+    if sampled < 15:
+        raise RuntimeError("Human review package could not produce 15 agreed stratified samples")
+
+    selected_negatives = []
+    coverage = []
+    by_query: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in all_rows:
+        by_query[row["query"]["id"]].append(row)
+    for query_id in sorted(queries):
+        query = queries[query_id]
+        nonpositive = [
+            row for row in by_query[query_id] if row["adjudicator"]["retrieval_grade"] <= 1
+        ]
+        chosen: list[tuple[dict[str, Any], str]] = []
+        used_items = set()
+        if query["answerability"] == "answerable":
+            class_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in nonpositive:
+                for provenance in _negative_classes(row["candidate"], query):
+                    class_rows[provenance].append(row)
+            for provenance in sorted(class_rows):
+                candidates_for_class = sorted(
+                    class_rows[provenance],
+                    key=lambda row: (
+                        -row["adjudicator"]["retrieval_grade"],
+                        row["candidate"]["minimum_rank"],
+                        row["pool_item_id"],
+                    ),
+                )
+                row = next(
+                    (candidate for candidate in candidates_for_class if candidate["pool_item_id"] not in used_items),
+                    None,
+                )
+                if row is not None:
+                    chosen.append((row, provenance))
+                    used_items.add(row["pool_item_id"])
+                if len(chosen) == 3:
+                    break
+            if len(chosen) < 3:
+                for row in sorted(nonpositive, key=lambda item: item["pool_item_id"]):
+                    if row["pool_item_id"] in used_items:
+                        continue
+                    classes = _negative_classes(row["candidate"], query)
+                    if classes:
+                        chosen.append((row, classes[0]))
+                        used_items.add(row["pool_item_id"])
+                    if len(chosen) == 3:
+                        break
+            for row, provenance in chosen:
+                source_span_id = sorted(
+                    {
+                        span_id
+                        for fragment in row["context"]["span_fragments"]
+                        for span_id in fragment["source_span_ids"]
+                    }
+                )[0]
+                negative = {
+                    "id": "negative-" + stable_id(query_id, row["pool_item_id"], provenance),
+                    "schema_version": 1,
+                    "query_id": query_id,
+                    "source_span_id": source_span_id,
+                    "grade": row["adjudicator"]["retrieval_grade"],
+                    "provenance": provenance,
+                    "status": "provisional",
+                }
+                validate_record("HardNegative", negative, paths)
+                selected_negatives.append(negative)
+        provenance_classes = sorted({provenance for _, provenance in chosen})
+        coverage.append(
+            {
+                "query_id": query_id,
+                "answerability": query["answerability"],
+                "judged_nonpositive_count": len(nonpositive),
+                "selected_hard_negative_count": len(chosen),
+                "selected_provenance_classes": provenance_classes,
+                "hard_negative_requirement_met": (
+                    len(chosen) >= 3 and len(provenance_classes) >= 2
+                    if query["answerability"] == "answerable"
+                    else None
+                ),
+                "no_answer_five_judgments_met": (
+                    len(nonpositive) >= 5 if query["answerability"] == "no_answer" else None
+                ),
+            }
+        )
+    if not all(
+        row["hard_negative_requirement_met"] is not False
+        and row["no_answer_five_judgments_met"] is not False
+        for row in coverage
+    ):
+        raise RuntimeError("Adjudicated pool does not meet hard-negative/no-answer coverage")
+
+    adjudicated_root = pool_root / "adjudicated"
+    write_jsonl(adjudicated_root / "hard_negatives.jsonl", selected_negatives, paths=paths)
+    write_jsonl(adjudicated_root / "coverage_report.jsonl", coverage, paths=paths)
+    queue = sorted(queue_by_id.values(), key=lambda row: (row["query"]["id"], row["depth"], row["pool_item_id"]))
+    human_root = pool_root / "human_review"
+    write_jsonl(human_root / "queue.jsonl", queue, paths=paths)
+    write_jsonl(
+        human_root / "decisions.template.jsonl",
+        (
+            {
+                "id": row["id"],
+                "query_id": row["query"]["id"],
+                "pool_item_id": row["pool_item_id"],
+                "selection_reasons": row["selection_reasons"],
+                "human_grade": None,
+                "selected_source_span_ids": [],
+                "selected_nugget_ids": [],
+                "decision": "PENDING",
+                "reviewer": None,
+                "rationale": "",
+            }
+            for row in queue
+        ),
+        paths=paths,
+    )
+    queue_counts = {
+        "agent_disagreements": sum("agent_disagreement" in row["selection_reasons"] for row in queue),
+        "no_answer_candidates": sum("no_answer" in row["selection_reasons"] for row in queue),
+        "stratified_agreement_samples": sampled,
+        "total_unique_candidates": len(queue),
+    }
+    receipt_template = {
+        "schema_version": 1,
+        "phase": "seed50-pooled-human-review",
+        "decision": "PENDING",
+        "reviewer": None,
+        "human_review_complete": False,
+        "reviewed_ids": [],
+        "corrections": [],
+        "required_scope": queue_counts,
+    }
+    write_json(human_root / "receipt.template.json", receipt_template, paths)
+    output_paths = {
+        "adjudicated/hard_negatives.jsonl": adjudicated_root / "hard_negatives.jsonl",
+        "adjudicated/coverage_report.jsonl": adjudicated_root / "coverage_report.jsonl",
+        "human_review/queue.jsonl": human_root / "queue.jsonl",
+        "human_review/decisions.template.jsonl": human_root / "decisions.template.jsonl",
+        "human_review/receipt.template.json": human_root / "receipt.template.json",
+    }
+    output_hashes = {name: sha256_file(path) for name, path in output_paths.items()}
+    write_json(
+        adjudicated_root / "manifest.json",
+        {
+            "id": stable_id(canonical_json(annotation_hashes), canonical_json(output_hashes), length=40),
+            "schema_version": 1,
+            "status": "agent_diagnostic_stable_human_review_pending",
+            "annotation_hashes": annotation_hashes,
+            "output_hashes": output_hashes,
+            "human_review_queue_counts": queue_counts,
+            "hard_negative_requirements_met": True,
+            "no_answer_requirements_met": True,
+            "human_review_complete": False,
+            "pooling_stable": False,
+            "seed_frozen": False,
+        },
+        paths,
+    )
+    return {**output_hashes, "adjudicated/manifest.json": sha256_file(adjudicated_root / "manifest.json")}
 
 
 def _seal_completed_annotations(
@@ -82,7 +361,7 @@ def _seal_completed_annotations(
         for name in report_names
     }
     for data_name, report_name in zip(data_names, report_names):
-        if reports[report_name]["annotation_sha256"] != sha256_file(annotation_dir / data_name):
+        if _reported_annotation_sha(reports[report_name]) != sha256_file(annotation_dir / data_name):
             raise RuntimeError(f"Annotation report hash mismatch: {report_name}")
 
     input_paths = {
@@ -295,9 +574,7 @@ def _seal_future_frontier(
         for name in report_names
     }
     for data_name, report_name in zip(data_names, report_names):
-        reported_sha = reports[report_name].get("annotation_sha256") or reports[report_name].get(
-            "adjudicator_sha256"
-        ) or reports[report_name].get("input_hashes", {}).get("annotation")
+        reported_sha = _reported_annotation_sha(reports[report_name])
         if reported_sha != sha256_file(annotation_dir / data_name):
             raise RuntimeError(f"Annotation report hash mismatch: depth{frontier_manifest['depth']}/{report_name}")
 
@@ -488,6 +765,9 @@ def _write_stability_report(
     }
     stability_root = pool_root / "stability"
     write_json(stability_root / "report.json", report, paths)
+    adjudicated_outputs = _write_adjudicated_review_outputs(
+        pool_root, annotation_sources, candidate_by_id, paths
+    )
     package_hashes = {
         str(path.relative_to(pool_root)).replace("\\", "/"): sha256_file(path)
         for path in package_paths
@@ -500,6 +780,7 @@ def _write_stability_report(
             "status": report["status"],
             "matrix_id": matrix["id"],
             "annotation_package_hashes": package_hashes,
+            "adjudicated_output_hashes": adjudicated_outputs,
             "report_sha256": sha256_file(stability_root / "report.json"),
             "agent_diagnostic_pooling_stable": agent_stable,
             "pooling_stable": False,

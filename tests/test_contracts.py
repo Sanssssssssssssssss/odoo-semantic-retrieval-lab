@@ -19,18 +19,23 @@ from osrlab.baselines import (
 from osrlab.benchmark import validate_topic_briefs
 from osrlab.chunking import _c1_scoring_windows, _c3, _chunk_configs, _make_chunk, _model_spec, _tokenizer, _windows, verify_evidence_snapshot
 from osrlab.extraction import EvidenceCollector, _normalize_rendered
+from osrlab.gates import require_approval
 from osrlab.jsonio import sha256_file, write_json, write_jsonl
 from osrlab.paths import LabPaths, PathBoundaryError
 from osrlab.pooling import (
     _agent_pool_is_stable,
+    _annotation_label,
     _application_family,
     _is_wrong_version_candidate,
+    _negative_classes,
     _order_tau,
+    _reported_annotation_sha,
     _run_provenance,
     _system_order,
     _true_sibling_headings,
 )
 from osrlab.performance import _framework_overhead, _percentiles, _runtime_initialization_ns
+from osrlab.diagnostics import _answerability_cv, _auc_ap, _holm, _ndcg10
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
 
 
@@ -50,6 +55,25 @@ def test_canonical_jsonl_is_stable(tmp_path: Path) -> None:
     path = tmp_path / "records.jsonl"
     write_jsonl(path, [{"id": "b", "value": 2}, {"value": 1, "id": "a"}])
     assert path.read_bytes() == b'{"id":"a","value":1}\n{"id":"b","value":2}\n'
+
+
+def test_approval_rejects_stale_hash_binding(tmp_path: Path) -> None:
+    paths = LabPaths(tmp_path)
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("first", encoding="utf-8")
+    write_json(
+        tmp_path / "reviews" / "phase" / "approval.json",
+        {
+            "decision": "APPROVE",
+            "phase": "phase",
+            "artifact_sha256": sha256_file(artifact),
+        },
+        paths,
+    )
+    require_approval("phase", paths, {"artifact_sha256": artifact})
+    artifact.write_text("changed", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="hash binding is stale"):
+        require_approval("phase", paths, {"artifact_sha256": artifact})
 
 
 def test_public_writers_enforce_allowlist() -> None:
@@ -491,6 +515,31 @@ def test_pool_system_order_and_kendall_tau_are_deterministic() -> None:
     assert _order_tau(reference, reference) == pytest.approx(1.0)
 
 
+def test_pool_review_label_and_negative_provenance_are_deterministic() -> None:
+    row = {
+        "retrieval_grade": 1,
+        "selected_source_span_ids": ["span-1"],
+        "selected_nugget_ids": [],
+    }
+    assert _annotation_label(row) == (1, ("span-1",), ())
+    candidate = {
+        "provenance": ["rerank_candidate", "semantic_candidate", "wrong_module_candidate"]
+    }
+    query = {"no_answer_reason": None}
+    assert _negative_classes(candidate, query) == [
+        "baseline_false_positive",
+        "semantic_nearest",
+        "wrong_module",
+    ]
+    assert _negative_classes(candidate, {"no_answer_reason": "wrong_version"}) == [
+        "wrong_version"
+    ]
+    assert _reported_annotation_sha({"annotation_file_sha256": "abc"}) == "abc"
+    assert _reported_annotation_sha(
+        {"bound_outputs": [{"path": "x/adjudicator.jsonl", "sha256": "def"}]}
+    ) == "def"
+
+
 def test_performance_percentiles_use_milliseconds() -> None:
     summary = _percentiles([1_000_000, 2_000_000, 3_000_000, 4_000_000])
     assert summary["p50_ms"] == pytest.approx(2.5)
@@ -512,19 +561,41 @@ def test_performance_cold_load_includes_full_runtime_initialization() -> None:
 def test_all_seed_runs_only_after_every_agent_approval(monkeypatch, tmp_path: Path) -> None:
     paths = LabPaths(tmp_path)
     approved: list[str] = []
-    monkeypatch.setattr(cli, "require_approval", lambda phase, _: approved.append(phase) or {})
-    monkeypatch.setattr(cli, "create_environment_receipt", lambda _: tmp_path / "environment.json")
+    executed: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "require_approval",
+        lambda phase, _, *args: approved.append(phase) or {},
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_environment_receipt",
+        lambda _: executed.append("verify") or tmp_path / "environment.json",
+    )
     for name in (
         "extract_twice",
         "chunk_twice",
         "run_smoke",
-        "run_provisional_matrix",
+        "run_baseline",
         "build_pool",
         "run_performance",
     ):
-        monkeypatch.setattr(cli, name, lambda _, stage=name: {"stage": stage})
+        monkeypatch.setattr(
+            cli,
+            name,
+            lambda _, stage=name: executed.append(stage) or {"stage": stage},
+        )
     result = cli.run_seed_pipeline(paths, {"status": "pass"})
-    assert approved == list(cli.SEED_APPROVALS)
+    assert approved == [*cli.SEED_APPROVALS, "seed50-diagnostics"]
+    assert executed == [
+        "verify",
+        "extract_twice",
+        "chunk_twice",
+        "run_smoke",
+        "run_baseline",
+        "build_pool",
+        "run_performance",
+    ]
     assert result["status"] == "agent_provisional_complete_human_review_pending"
     assert result["human_review_complete"] is result["seed_frozen"] is False
     assert list(result["stages"]) == [
@@ -536,6 +607,32 @@ def test_all_seed_runs_only_after_every_agent_approval(monkeypatch, tmp_path: Pa
         "pool",
         "perf",
     ]
+
+
+def test_statistical_diagnostics_are_grouped_and_deterministic() -> None:
+    rows = [
+        {
+            "query_id": f"q{index}",
+            "answerable": int(index % 5 != 0),
+            "source_fact_group": f"g{index // 2}",
+            "score": float(20 - index),
+        }
+        for index in range(20)
+    ]
+    result = _answerability_cv(rows)
+    seen = set()
+    for fold in result["folds"]:
+        assert fold["test_query_ids"]
+        assert not (seen & set(fold["test_source_fact_groups"]))
+        seen.update(fold["test_source_fact_groups"])
+    assert seen == {row["source_fact_group"] for row in rows}
+    assert 0 <= result["abstention_precision"] <= 1
+    assert _holm([0.01, 0.04, 0.03]) == pytest.approx([0.03, 0.06, 0.06])
+    qrels = {"a": 3, "b": 2}
+    assert _ndcg10(
+        qrels, [{"chunk_id": "a", "score": 2.0}, {"chunk_id": "b", "score": 1.0}]
+    ) == pytest.approx(1.0)
+    assert _auc_ap(np.asarray([1, 0]), np.asarray([1.0, 1.0]))[1] == pytest.approx(0.5)
 
 
 def test_depth20_annotation_package_binds_all_inputs_and_outputs() -> None:

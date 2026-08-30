@@ -1,7 +1,7 @@
 # Odoo Semantic Retrieval Lab — Evidence-led implementation plan
 
-Status: planning and source inspection only. No retriever, benchmark runner, database, model, or
-main-agent integration has been implemented.
+Status: P0-P4 implemented and independently Agent-reviewed. Seed50 and pooled judgments remain
+provisional pending the required human review; no frozen-gold, SOTA, or main-agent claim is allowed.
 
 ## 1. Product contract
 
@@ -34,7 +34,7 @@ The immutable receipt is:
 Current snapshot:
 
 - repository: `https://github.com/odoo/documentation.git`;
-- branch: `19.0`;
+- source ref: `19.0`;
 - commit: `32a8b8d77833f22b4bc74ed4ea78b6a82b5338fd`;
 - commit time: `2026-08-29T09:35:27Z`;
 - license: CC-BY-SA-4.0;
@@ -45,8 +45,8 @@ Current snapshot:
 - snapshot manifest SHA-256:
   `C779918DAA43C93EF715C3A83CE759019A82629F23FB22C987FC1B0EC599DFAD`.
 
-The checkout is clean and tracks `origin/19.0`. A branch name is never sufficient provenance;
-every corpus build must bind to the commit and manifest hash.
+The checkout is clean and detached at the pinned commit. A branch name is never sufficient
+provenance; every corpus build must bind to the commit and manifest hash.
 
 ## 3. What the real documentation implies
 
@@ -488,20 +488,21 @@ introduced only when both are real implementations and share parity tests.
 8. **Integration gate** — only after the lab is independently accepted; no mainline integration is
    part of the current plan.
 
-## 15. Next implementation slice
+## 15. Remaining promotion work
 
-The next slice should implement only the extraction spike:
+P0-P4 provide an Agent-provisional experimental baseline. Depth-50 pooling, saturation,
+hard-negative coverage, statistical diagnostics, no-answer diagnostics, and CLI gating have each
+received fresh independent Agent approval. Promotion now requires:
 
-1. create the standalone repository/environment and lock the existing source receipt;
-2. run the official Sphinx parser with the repository's extensions;
-3. extract evidence units from a deliberately difficult sample containing `control_bills.rst`,
-   includes, substitutions, tables, tabs, code, and admonitions;
-4. compare source-to-doctree-to-rendered text and prove stable citations;
-5. produce an extraction coverage/error report;
-6. request independent review before expanding to the full corpus or writing retrieval code.
+1. have a human review every Agent disagreement, every no-answer candidate, and the declared
+   stratified agreement sample, recording corrections in the versioned receipt;
+2. freeze the corrected Seed50 gold, regenerate derived qrels for all four chunkers, and rerun the
+   final E0-E3 matrix without using Seed as a SOTA claim;
+3. only then design and collect the formal 160-topic V0 with two human annotators, adjudication, and
+   the preregistered 96/64 dev/hidden split.
 
-This slice resolves the highest-risk unknown — faithful Odoo document structure — before a chunker,
-database schema, or benchmark label is made expensive to change.
+SQL/pgvector, ANN, generation, LLM judges, and main-Agent integration remain later experiments, not
+implicit parts of this promotion step.
 
 ## References
 

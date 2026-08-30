@@ -1,0 +1,44 @@
+{
+  "agent_provisional": true,
+  "allowed_inputs": [
+    {
+      "path": "benchmarks/seed50/pooling/provisional/frontiers/depth50/context.jsonl",
+      "sha256": "64abe5d2c48a2afdbe3b40ccbad80b6bd994bbe1c12b065130f9c098ee7d5110"
+    },
+    {
+      "path": "benchmarks/seed50/pooling/provisional/frontiers/depth50/annotations/annotator_b.template.jsonl",
+      "sha256": "58ee6731e219996a166f39b111f6d5549e64e550cb1b18dc8b9f8440609f66bc"
+    },
+    {
+      "path": "benchmarks/seed50/provisional/queries.jsonl",
+      "sha256": "756caf32c7e9f19a986d3d3031650341360bfd70db0244a9f0b7f9f1e1457ae6"
+    },
+    {
+      "path": "benchmarks/seed50/provisional/nuggets.jsonl",
+      "sha256": "d1a76d80742c9e48901ae56854d69d9b2ae7e8bbd293bee91d04c9e450e41522"
+    }
+  ],
+  "annotation_file_sha256": "6fbfae53504af9cb66596e43cf59bad710279f43aa77293bc05f65258b71e3d5",
+  "annotator_id": "annotator_b",
+  "blind_declaration": "Annotated independently from only the hashed allowed inputs listed here; no annotator_a, adjudicator, aggregate annotation, judgment, agreement, or manifest file was inspected.",
+  "grade_counts": {
+    "0": 2844,
+    "1": 126,
+    "2": 0,
+    "3": 15
+  },
+  "no_answer_context_count": 659,
+  "query_count": 50,
+  "record_count": 2985,
+  "selected_nugget_record_count": 15,
+  "selected_source_span_record_count": 15,
+  "status": "agent_provisional",
+  "validation": {
+    "canonical_jsonl": true,
+    "context_template_alignment": true,
+    "id_order_preserved": true,
+    "no_answer_positive_count": 0,
+    "selected_nugget_ids_same_query": true,
+    "selected_source_span_ids_visible": true
+  }
+}

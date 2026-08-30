@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 from .baselines import run_provisional_matrix
 from .chunking import chunk_twice
+from .diagnostics import run_diagnostics
 from .extraction import extract_twice
 from .gates import require_approval
 from .paths import LabPaths
@@ -30,6 +31,7 @@ SEED_APPROVALS = (
     "p3b-depth30-agent-annotations",
     "p3b-depth40-agent-annotations",
     "p3b-depth50-agent-annotations",
+    "seed50-diagnostics",
     "p4",
 )
 
@@ -45,10 +47,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_baseline(paths: LabPaths) -> dict:
+    return {
+        "matrix": run_provisional_matrix(paths),
+        "diagnostics": run_diagnostics(paths),
+    }
+
+
+def _require_seed_approval(phase: str, paths: LabPaths) -> dict:
+    if phase != "seed50-diagnostics":
+        return require_approval(phase, paths)
+    root = paths.root / "artifacts" / "diagnostics" / "seed50-provisional"
+    return require_approval(
+        phase,
+        paths,
+        {
+            "manifest_sha256": root / "manifest.json",
+            "report_sha256": root / "report.json",
+            "implementation_sha256": paths.root / "src" / "osrlab" / "diagnostics.py",
+        },
+    )
+
+
 def run_seed_pipeline(paths: LabPaths, verification: dict) -> dict:
-    approvals = {phase: require_approval(phase, paths) for phase in SEED_APPROVALS}
+    approvals = {phase: _require_seed_approval(phase, paths) for phase in SEED_APPROVALS}
     human_receipt = (
-        paths.root / "benchmarks" / "seed50" / "provisional" / "human_review" / "receipt.json"
+        paths.root
+        / "benchmarks"
+        / "seed50"
+        / "pooling"
+        / "provisional"
+        / "human_review"
+        / "receipt.json"
     )
     human_review_complete = False
     if human_receipt.is_file():
@@ -56,15 +86,18 @@ def run_seed_pipeline(paths: LabPaths, verification: dict) -> dict:
         human_review_complete = (
             human.get("decision") == "APPROVE" and human.get("human_review_complete") is True
         )
-    stages = {
-        "verify": {**verification, "environment_receipt": str(create_environment_receipt(paths))},
-        "extract": extract_twice(paths),
-        "chunk": chunk_twice(paths),
-        "smoke": run_smoke(paths),
-        "baseline": run_provisional_matrix(paths),
-        "pool": build_pool(paths),
-        "perf": run_performance(paths),
+    stages = {}
+    stages["verify"] = {
+        **verification,
+        "environment_receipt": str(create_environment_receipt(paths)),
     }
+    stages["extract"] = extract_twice(paths)
+    stages["chunk"] = chunk_twice(paths)
+    stages["smoke"] = run_smoke(paths)
+    stages["baseline"] = run_baseline(paths)
+    _require_seed_approval("seed50-diagnostics", paths)
+    stages["pool"] = build_pool(paths)
+    stages["perf"] = run_performance(paths)
     return {
         "profile": "seed",
         "status": (
@@ -104,7 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "baseline":
         require_approval("p3a", paths)
-        print(json.dumps(run_provisional_matrix(paths), indent=2, ensure_ascii=False))
+        print(json.dumps(run_baseline(paths), indent=2, ensure_ascii=False))
         return 0
     if args.command == "pool":
         print(json.dumps(build_pool(paths), indent=2, ensure_ascii=False))
