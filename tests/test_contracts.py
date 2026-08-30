@@ -8,10 +8,16 @@ import numpy as np
 from docutils import nodes
 
 from osrlab.contract import validate_record
+from osrlab.baselines import (
+    _aggregate_window_scores,
+    _hybrid,
+    _preflight_persisted_rankings,
+    _read_approved_trec_run,
+)
 from osrlab.benchmark import validate_topic_briefs
 from osrlab.chunking import _c1_scoring_windows, _c3, _chunk_configs, _make_chunk, _model_spec, _tokenizer, _windows, verify_evidence_snapshot
 from osrlab.extraction import EvidenceCollector, _normalize_rendered
-from osrlab.jsonio import write_json, write_jsonl
+from osrlab.jsonio import sha256_file, write_json, write_jsonl
 from osrlab.paths import LabPaths, PathBoundaryError
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
 
@@ -249,7 +255,7 @@ def test_evidence_cards_remove_duplicate_fragments_and_respect_budget() -> None:
     chunks = {
         chunk_id: {
             "id": chunk_id,
-            "source_uri": "https://example.invalid/doc#anchor",
+            "source_uri": "https://example.invalid/doc#wrong-chunk-anchor",
             "span_fragments": [fragment],
         }
         for chunk_id in ("chunk-a", "chunk-b")
@@ -266,6 +272,8 @@ def test_evidence_cards_remove_duplicate_fragments_and_respect_budget() -> None:
     )
     assert [card["chunk_id"] for card in cards] == ["chunk-a"]
     assert cards[0]["token_count"] == cards[0]["cumulative_token_count"] == 2
+    assert cards[0]["source_uri"].endswith("#anchor")
+    assert cards[0]["source_uri"].rsplit("#", 1)[1] == cards[0]["anchor"]
     assert diagnostics["selected_tokens"] == 2
 
 
@@ -293,3 +301,125 @@ def test_e0_uses_lexical_text_without_leaking_past_partial_fragment() -> None:
     base["span_fragments"][0]["unit_char_end"] = 5
     partial = _lexical_chunk_text(base, {"unit": unit}, {"unit": 2})
     assert "alpha" in partial and "beta" not in partial
+
+
+def test_evidence_card_last_cut_uses_sentence_boundary() -> None:
+    class Tokenizer:
+        def __call__(self, *_args, **_kwargs):
+            return {"offset_mapping": [(0, 5), (5, 6), (7, 11), (11, 12)]}
+
+    fragment = {
+        "evidence_unit_id": "unit",
+        "source_span_ids": ["span"],
+        "source_uri": "https://example.invalid/doc#anchor",
+        "anchor": "anchor",
+        "unit_token_start": 0,
+        "unit_token_end": 4,
+        "chunk_token_start": 0,
+        "chunk_token_end": 4,
+        "unit_char_start": 0,
+        "unit_char_end": 12,
+    }
+    cards, _ = assemble_evidence_cards(
+        "query",
+        [{"rank": 1, "chunk_id": "chunk", "score": 1.0}],
+        {
+            "chunk": {
+                "id": "chunk",
+                "source_uri": "https://example.invalid/doc#anchor",
+                "span_fragments": [fragment],
+            }
+        },
+        {"unit": {"rendered_text": "alpha. beta."}},
+        token_budget=2,
+        tokenizer=Tokenizer(),
+    )
+    assert cards[0]["excerpt"] == "alpha."
+    assert cards[0]["token_count"] == 2
+    assert cards[0]["truncated"] is True
+    assert cards[0]["cut"]["kind"] == "sentence_boundary"
+
+
+def test_logical_chunk_score_is_max_subwindow() -> None:
+    scores = _aggregate_window_scores(
+        np.asarray([0.2, 0.9, 0.4], dtype=np.float32),
+        np.asarray([0, 0, 1], dtype=np.int32),
+        2,
+    )
+    assert scores.tolist() == pytest.approx([0.9, 0.4])
+
+
+def test_rrf_uses_fixed_k_and_chunk_id_tie_break() -> None:
+    sparse = {
+        "q": [
+            {"rank": 1, "chunk_id": "b"},
+            {"rank": 2, "chunk_id": "a"},
+        ]
+    }
+    dense = {
+        "q": [
+            {"rank": 1, "chunk_id": "a"},
+            {"rank": 2, "chunk_id": "b"},
+        ]
+    }
+    ranking = _hybrid(sparse, dense)["q"]
+    assert [item["chunk_id"] for item in ranking] == ["a", "b"]
+    assert ranking[0]["score"] == pytest.approx(1 / 61 + 1 / 62)
+
+
+def test_refresh_rejects_tampered_persisted_trec_run(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    run_path = run_root / "run.trec"
+    run_path.write_text("q Q0 c 1 1.0 tag\n", encoding="utf-8")
+    manifest = {
+        "id": "run-id",
+        "chunk_config_id": "C2-structure-bounded",
+        "system": "E0-BM25",
+        "output_hashes": {"run.trec": sha256_file(run_path)},
+    }
+    manifest_path = run_root / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    entry = {
+        "run_id": "run-id",
+        "chunk_config_id": "C2-structure-bounded",
+        "system": "E0-BM25",
+        "manifest_sha256": sha256_file(manifest_path),
+    }
+    assert _read_approved_trec_run(entry, run_root)["q"][0]["chunk_id"] == "c"
+    run_path.write_text("q Q0 evil 1 9.0 tag\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="TREC run hash mismatch"):
+        _read_approved_trec_run(entry, run_root)
+
+
+def test_refresh_preflights_every_run_before_any_write(tmp_path: Path) -> None:
+    entries = []
+    for run_id in ("first", "second"):
+        run_root = tmp_path / run_id
+        run_root.mkdir()
+        run_path = run_root / "run.trec"
+        run_path.write_text(f"q Q0 {run_id} 1 1.0 tag\n", encoding="utf-8")
+        manifest = {
+            "id": run_id,
+            "chunk_config_id": "C2-structure-bounded",
+            "system": "E0-BM25",
+            "output_hashes": {"run.trec": sha256_file(run_path)},
+        }
+        manifest_path = run_root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+        entries.append(
+            {
+                "run_id": run_id,
+                "chunk_config_id": "C2-structure-bounded",
+                "system": "E0-BM25",
+                "manifest_sha256": sha256_file(manifest_path),
+            }
+        )
+    (tmp_path / "second" / "run.trec").write_text(
+        "q Q0 tampered 1 9.0 tag\n", encoding="utf-8"
+    )
+    write_calls = []
+    with pytest.raises(RuntimeError, match="TREC run hash mismatch"):
+        rankings = _preflight_persisted_rankings(entries, tmp_path, {"q"})
+        write_calls.extend(rankings)
+    assert write_calls == []

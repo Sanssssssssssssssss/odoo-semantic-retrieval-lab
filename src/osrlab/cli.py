@@ -4,6 +4,7 @@ import argparse
 import json
 from collections.abc import Sequence
 
+from .baselines import run_provisional_matrix
 from .chunking import chunk_twice
 from .extraction import extract_twice
 from .gates import require_approval
@@ -46,5 +47,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "smoke":
         require_approval("p2a", paths)
         print(json.dumps(run_smoke(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "baseline":
+        require_approval("p3a", paths)
+        print(json.dumps(run_provisional_matrix(paths), indent=2, ensure_ascii=False))
         return 0
     raise SystemExit(f"Command '{args.command}' is gated until its implementation phase is approved")

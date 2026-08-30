@@ -88,8 +88,8 @@ def verify_evidence_snapshot(paths: LabPaths | None = None) -> dict[str, Any]:
     return manifest
 
 
-def _model_spec(paths: LabPaths) -> dict[str, Any]:
-    return json.loads((paths.root / "configs" / "models.json").read_text(encoding="utf-8"))[MODEL_KEY]
+def _model_spec(paths: LabPaths, model_key: str = MODEL_KEY) -> dict[str, Any]:
+    return json.loads((paths.root / "configs" / "models.json").read_text(encoding="utf-8"))[model_key]
 
 
 def _snapshot_dir(paths: LabPaths, spec: dict[str, Any]) -> Path:
@@ -103,9 +103,9 @@ def _snapshot_dir(paths: LabPaths, spec: dict[str, Any]) -> Path:
     )
 
 
-def verify_model_snapshot(paths: LabPaths | None = None) -> dict[str, Any]:
+def verify_model_snapshot(paths: LabPaths | None = None, model_key: str = MODEL_KEY) -> dict[str, Any]:
     paths = paths or LabPaths.discover()
-    spec = _model_spec(paths)
+    spec = _model_spec(paths, model_key)
     snapshot = _snapshot_dir(paths, spec)
     if not snapshot.is_dir():
         raise RuntimeError(
@@ -130,7 +130,7 @@ def verify_model_snapshot(paths: LabPaths | None = None) -> dict[str, Any]:
         "snapshot_path": str(snapshot.relative_to(paths.root)).replace("\\", "/"),
         "files": actual,
     }
-    write_json(paths.root / "artifacts" / "models" / f"{MODEL_KEY}.json", receipt, paths)
+    write_json(paths.root / "artifacts" / "models" / f"{model_key}.json", receipt, paths)
     return receipt
 
 

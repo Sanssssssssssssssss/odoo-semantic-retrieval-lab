@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from collections import defaultdict
 from importlib.metadata import version
@@ -119,6 +120,7 @@ def assemble_evidence_cards(
     *,
     max_cards: int = 4,
     token_budget: int = 2_048,
+    tokenizer: Any | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, float | int]]:
     cards: list[dict[str, Any]] = []
     selected: dict[str, list[tuple[int, int]]] = defaultdict(list)
@@ -149,14 +151,69 @@ def assemble_evidence_cards(
             )
             not in seen_fragments
         ]
-        novel_tokens = sum(fragment["unit_token_end"] - fragment["unit_token_start"] for fragment in novel)
-        if not novel or cumulative + novel_tokens > token_budget:
+        if not novel:
             continue
+        remaining = token_budget - cumulative
+        chosen: list[dict[str, Any]] = []
+        cut: dict[str, Any] | None = None
+        for fragment in novel:
+            length = fragment["unit_token_end"] - fragment["unit_token_start"]
+            if length <= remaining:
+                chosen.append(fragment)
+                remaining -= length
+                continue
+            if chosen:
+                last = chosen[-1]
+                cut = {
+                    "kind": "evidence_unit_boundary",
+                    "evidence_unit_id": last["evidence_unit_id"],
+                    "unit_token_end": last["unit_token_end"],
+                    "unit_char_end": last["unit_char_end"],
+                }
+                break
+            if tokenizer is not None and remaining > 0:
+                unit = units[fragment["evidence_unit_id"]]
+                offsets = tokenizer(
+                    unit["rendered_text"],
+                    add_special_tokens=False,
+                    return_offsets_mapping=True,
+                    truncation=False,
+                )["offset_mapping"]
+                limit = min(fragment["unit_token_start"] + remaining, fragment["unit_token_end"])
+                max_char = offsets[limit - 1][1]
+                boundaries = [
+                    match.end()
+                    for match in re.finditer(r"(?:[.!?](?=\s|$)|\n+)", unit["rendered_text"])
+                    if fragment["unit_char_start"] < match.end() <= max_char
+                ]
+                if boundaries:
+                    char_end = boundaries[-1]
+                    token_end = max(
+                        index + 1
+                        for index, (_, end) in enumerate(offsets)
+                        if fragment["unit_token_start"] <= index < fragment["unit_token_end"] and end <= char_end
+                    )
+                    partial = dict(fragment)
+                    partial["unit_token_end"] = token_end
+                    partial["unit_char_end"] = char_end
+                    partial["chunk_token_end"] = partial["chunk_token_start"] + token_end - partial["unit_token_start"]
+                    chosen.append(partial)
+                    remaining -= token_end - partial["unit_token_start"]
+                    cut = {
+                        "kind": "sentence_boundary",
+                        "evidence_unit_id": partial["evidence_unit_id"],
+                        "unit_token_end": token_end,
+                        "unit_char_end": char_end,
+                    }
+            break
+        if not chosen:
+            continue
+        novel_tokens = sum(fragment["unit_token_end"] - fragment["unit_token_start"] for fragment in chosen)
         excerpt = "\n\n".join(
             units[fragment["evidence_unit_id"]]["rendered_text"][
                 fragment["unit_char_start"] : fragment["unit_char_end"]
             ]
-            for fragment in novel
+            for fragment in chosen
         )
         cumulative += novel_tokens
         card = {
@@ -166,27 +223,34 @@ def assemble_evidence_cards(
             "rank": result["rank"],
             "chunk_id": chunk["id"],
             "retrieval_score": float(result["score"]),
-            "source_uri": chunk["source_uri"],
-            "anchor": novel[0]["anchor"],
+            "source_uri": chosen[0]["source_uri"],
+            "anchor": chosen[0]["anchor"],
             "excerpt": excerpt,
             "token_count": novel_tokens,
             "cumulative_token_count": cumulative,
-            "source_span_ids": sorted({span for fragment in novel for span in fragment["source_span_ids"]}),
-            "span_fragments": novel,
-            "truncated": False,
-            "cut": None,
+            "source_span_ids": sorted({span for fragment in chosen for span in fragment["source_span_ids"]}),
+            "span_fragments": chosen,
+            "truncated": cut is not None,
+            "cut": cut,
         }
         validate_record("EvidenceCard", card)
         cards.append(card)
         raw_tokens += candidate_tokens
         overlap_tokens += overlap
-        for unit_id, value in intervals.items():
+        chosen_intervals: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for fragment in chosen:
+            chosen_intervals[fragment["evidence_unit_id"]].append(
+                (fragment["unit_token_start"], fragment["unit_token_end"])
+            )
+        for unit_id, value in chosen_intervals.items():
             selected[unit_id].extend(value)
             selected[unit_id] = _merge_intervals(selected[unit_id])
         seen_fragments.update(
             (fragment["evidence_unit_id"], fragment["unit_token_start"], fragment["unit_token_end"])
-            for fragment in novel
+            for fragment in chosen
         )
+        if cut is not None:
+            break
     return cards, {
         "selected_cards": len(cards),
         "selected_tokens": cumulative,
@@ -255,7 +319,7 @@ def _source_document_ndcg(
                 judgment["grade"], qrels[judgment["query_id"]].get(document_id, 0)
             )
     run: dict[str, dict[str, float]] = defaultdict(dict)
-    for query_id in answerable_ids:
+    for query_id in sorted(answerable_ids):
         for result in rankings[query_id]:
             document_id = chunks[result["chunk_id"]]["source_document_id"]
             run[query_id][document_id] = max(result["score"], run[query_id].get(document_id, -math.inf))
@@ -309,7 +373,12 @@ def _evidence_metrics(
         "required_nugget_completeness_at_2048_tokens": float(np.mean(completeness)),
         "irrelevant_token_ratio_at_2048_tokens": float(np.mean(irrelevant_ratios)),
         "duplicate_evidence_rate_at_2048_tokens": float(
-            np.mean([card_diagnostics[query_id]["duplicate_evidence_rate"] for query_id in answerable_ids])
+            np.mean(
+                [
+                    card_diagnostics[query_id]["duplicate_evidence_rate"]
+                    for query_id in sorted(answerable_ids)
+                ]
+            )
         ),
     }
 
