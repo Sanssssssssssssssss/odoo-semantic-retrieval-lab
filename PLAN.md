@@ -365,20 +365,20 @@ Measure and report separately:
 - source extraction and index build time;
 - model/index cold load time;
 - warm query encoding, lexical search, vector search, fusion, reranking, and total latency;
-- p50, p90, p95, and p99 over shuffled per-query observations;
-- throughput in a separate declared load test, not mixed into single-query latency;
-- steady and peak RSS, index bytes, model bytes, CPU time, and GPU VRAM when applicable.
+- p50, p90, p95, and p99 over a deterministic cycle of real Seed queries;
+- completed single-stream QPS from the same concurrency=1 warm loop, explicitly labelled as descriptive rather than server capacity;
+- process-tree peak RSS, index bytes, model bytes, cache bytes, and GPU VRAM when applicable.
 
 The reference run is offline, with concurrency, process count, ONNX/BLAS thread counts, provider,
-CPU/GPU, OS, and power mode fixed and recorded. Repeat complete shuffled benchmark passes and report
+CPU/GPU, OS, and power mode fixed and recorded. Repeat complete deterministic benchmark passes and report
 paired per-query deltas with 95% confidence intervals. A candidate is promoted only when the
 predeclared primary metric improves beyond uncertainty and all accuracy/latency/resource guardrails
 remain satisfied. Latency budgets are calibrated from the first reference-machine runs rather than
 invented before measurement.
 
 The warm single-stream profile loops real queries for at least 60 seconds and at least 1,024
-completed requests before reporting tail percentiles. A later server profile uses declared arrival
-rates and reports achieved QPS with p99; it is kept separate from local single-query timing. ANN
+completed requests before reporting tail percentiles and descriptive single-stream QPS. A later server
+profile may use declared arrival rates and report load-capacity QPS with p99; it is outside P0-P4. ANN
 experiments publish quality-latency, quality-QPS, and quality-index-size Pareto curves rather than a
 single tuned number.
 

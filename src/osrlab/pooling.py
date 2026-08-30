@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+import ir_measures
+from scipy.stats import kendalltau
 
 from .baselines import _read_approved_trec_run
 from .benchmark import SNAPSHOT_ID, load_jsonl
@@ -15,6 +19,116 @@ from .verify import verify_source
 
 
 DEPTHS = (20, 30, 40, 50)
+
+
+def _json_digest(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _system_order(scores: dict[str, float]) -> list[str]:
+    return sorted(scores, key=lambda system: (-scores[system], system))
+
+
+def _order_tau(reference: list[str], candidate: list[str]) -> float:
+    candidate_rank = {system: rank for rank, system in enumerate(candidate)}
+    value = kendalltau(
+        list(range(len(reference))),
+        [candidate_rank[system] for system in reference],
+        variant="b",
+    ).statistic
+    return float(value)
+
+
+def _agent_pool_is_stable(depth_rows: list[dict[str, Any]]) -> bool:
+    return len(depth_rows) >= 3 and all(
+        row["new_grade_2_or_3_yield"] < 0.01
+        and row["leave_one_run_out_min_kendall_tau"] >= 0.95
+        for row in depth_rows[-2:]
+    )
+
+
+def _seal_completed_annotations(
+    output: Path,
+    manifest: dict[str, Any],
+    benchmark_root: Path,
+    evidence_root: Path,
+    paths: LabPaths,
+) -> dict[str, Any]:
+    annotation_dir = output / "annotations"
+    data_names = ("annotator_a.jsonl", "annotator_b.jsonl", "adjudicator.jsonl")
+    report_names = ("annotator_a.report.json", "annotator_b.report.json", "agreement_report.json")
+    completed = [annotation_dir / name for name in data_names + report_names]
+    if not any(path.is_file() for path in completed):
+        return manifest
+    if not all(path.is_file() for path in completed):
+        missing = [path.name for path in completed if not path.is_file()]
+        raise RuntimeError(f"Incomplete annotation package: {', '.join(missing)}")
+
+    context_ids = [row["id"] for row in load_jsonl(output / "active_frontier_context.jsonl")]
+    for name in data_names:
+        rows = load_jsonl(annotation_dir / name)
+        ids = [row["id"] for row in rows]
+        if ids != context_ids or len(ids) != len(set(ids)):
+            raise RuntimeError(f"Annotation coverage/order mismatch: {name}")
+        for row in rows:
+            grade = row["retrieval_grade"]
+            if grade in (0, 1) and row["selected_nugget_ids"]:
+                raise RuntimeError(f"Grade {grade} cannot bind nuggets: {row['id']}")
+            if grade >= 2 and (not row["selected_nugget_ids"] or not row["selected_source_span_ids"]):
+                raise RuntimeError(f"Positive annotation lacks evidence binding: {row['id']}")
+
+    reports = {
+        name: json.loads((annotation_dir / name).read_text(encoding="utf-8"))
+        for name in report_names
+    }
+    for data_name, report_name in zip(data_names, report_names):
+        if reports[report_name]["annotation_sha256"] != sha256_file(annotation_dir / data_name):
+            raise RuntimeError(f"Annotation report hash mismatch: {report_name}")
+
+    input_paths = {
+        "retrieval_pool.jsonl": output / "retrieval_pool.jsonl",
+        "active_frontier_context.jsonl": output / "active_frontier_context.jsonl",
+        "annotator_a.template.jsonl": annotation_dir / "annotator_a.template.jsonl",
+        "annotator_b.template.jsonl": annotation_dir / "annotator_b.template.jsonl",
+        "adjudicator.template.jsonl": annotation_dir / "adjudicator.template.jsonl",
+        "queries.jsonl": benchmark_root / "queries.jsonl",
+        "nuggets.jsonl": benchmark_root / "nuggets.jsonl",
+        "judgments.jsonl": benchmark_root / "judgments.jsonl",
+        "evidence_units.jsonl": evidence_root / "evidence_units.jsonl",
+        "source_spans.jsonl": evidence_root / "source_spans.jsonl",
+    }
+    input_hashes = {name: sha256_file(path) for name, path in input_paths.items()}
+    pool_contract_sha256 = _json_digest(manifest)
+    agreement = reports["agreement_report.json"]
+    agreement["pool_contract_sha256"] = pool_contract_sha256
+    agreement["input_hashes"] = input_hashes
+    write_json(annotation_dir / "agreement_report.json", agreement, paths)
+
+    annotation_hashes = {
+        name: sha256_file(annotation_dir / name) for name in data_names + report_names
+    }
+    package = {
+        "id": stable_id(pool_contract_sha256, canonical_json(annotation_hashes), length=40),
+        "schema_version": 1,
+        "status": "agent_provisional_human_review_pending",
+        "pool_contract_sha256": pool_contract_sha256,
+        "input_hashes": input_hashes,
+        "annotation_hashes": annotation_hashes,
+        "human_gold": False,
+        "human_review_complete": False,
+        "pooling_stable": False,
+        "seed_frozen": False,
+    }
+    package_path = annotation_dir / "manifest.json"
+    write_json(package_path, package, paths)
+    manifest["pool_contract_sha256"] = pool_contract_sha256
+    manifest["annotation_package_sha256"] = sha256_file(package_path)
+    manifest["status"] = "provisional_depth20_agent_adjudicated_human_review_pending"
+    manifest["output_hashes"].update(
+        {f"annotations/{name}": digest for name, digest in annotation_hashes.items()}
+    )
+    manifest["output_hashes"]["annotations/manifest.json"] = sha256_file(package_path)
+    return manifest
 
 
 def _run_provenance(system: str) -> str:
@@ -49,6 +163,351 @@ def _true_sibling_headings(
     siblings = headings_by_parent[(heading["source_document_id"], heading["parent_section_id"])]
     index = next(index for index, candidate in enumerate(siblings) if candidate["id"] == heading["id"])
     return siblings[max(0, index - 1) : index] + siblings[index + 1 : index + 2]
+
+
+def _write_future_frontiers(
+    output: Path,
+    pool_manifest: dict[str, Any],
+    pool_records: list[dict[str, Any]],
+    chunks_by_config: dict[str, dict[str, dict[str, Any]]],
+    matrix: dict[str, Any],
+    paths: LabPaths,
+) -> None:
+    approval = require_approval("p3b-depth20-agent-annotations", paths)
+    pool_manifest_path = output / "manifest.json"
+    if approval["pool_manifest_sha256"] != sha256_file(pool_manifest_path):
+        raise RuntimeError("Depth20 approval does not bind the current pool manifest")
+    for depth in DEPTHS[1:]:
+        contexts = []
+        templates = []
+        for item in pool_records:
+            if item["first_pool_depth"] != depth:
+                continue
+            chunk = chunks_by_config[item["chunk_config_id"]][item["chunk_id"]]
+            contexts.append(
+                {
+                    "id": item["id"],
+                    "query_id": item["query_id"],
+                    "chunk_config_hash": item["chunk_config_hash"],
+                    "chunk_id": item["chunk_id"],
+                    "title": chunk["title"],
+                    "text": chunk["text"],
+                    "source_uri": chunk["source_uri"],
+                    "span_fragments": chunk["span_fragments"],
+                }
+            )
+            templates.append(
+                {
+                    "id": item["id"],
+                    "query_id": item["query_id"],
+                    "context_id": item["id"],
+                    "chunk_config_hash": item["chunk_config_hash"],
+                    "chunk_id": item["chunk_id"],
+                    "annotator_id": None,
+                    "retrieval_grade": None,
+                    "selected_source_span_ids": [],
+                    "selected_nugget_ids": [],
+                    "rationale": "",
+                    "annotation_status": "pending",
+                    "adjudication_status": "pending_dual_annotation",
+                }
+            )
+        root = output / "frontiers" / f"depth{depth}"
+        write_jsonl(root / "context.jsonl", contexts, paths=paths)
+        for name in ("annotator_a", "annotator_b", "adjudicator"):
+            write_jsonl(root / "annotations" / f"{name}.template.jsonl", templates, paths=paths)
+        output_hashes = {
+            "context.jsonl": sha256_file(root / "context.jsonl"),
+            **{
+                f"annotations/{name}.template.jsonl": sha256_file(
+                    root / "annotations" / f"{name}.template.jsonl"
+                )
+                for name in ("annotator_a", "annotator_b", "adjudicator")
+            },
+        }
+        frontier_manifest = {
+                "id": stable_id(pool_manifest["id"], str(depth), canonical_json(output_hashes), length=40),
+                "schema_version": 1,
+                "status": "pending_dual_agent_annotation",
+                "depth": depth,
+                "previous_depth": depth - 10,
+                "item_count": len(contexts),
+                "pool_id": pool_manifest["id"],
+                "pool_manifest_sha256": sha256_file(pool_manifest_path),
+                "retrieval_pool_sha256": sha256_file(output / "retrieval_pool.jsonl"),
+                "output_hashes": output_hashes,
+                "human_gold": False,
+                "pooling_stable": False,
+                "seed_frozen": False,
+            }
+        write_json(root / "manifest.json", frontier_manifest, paths)
+        _seal_future_frontier(output, root, frontier_manifest, paths)
+    _write_stability_report(output, pool_records, matrix, paths)
+
+
+def _seal_future_frontier(
+    pool_root: Path,
+    frontier_root: Path,
+    frontier_manifest: dict[str, Any],
+    paths: LabPaths,
+) -> None:
+    annotation_dir = frontier_root / "annotations"
+    data_names = ("annotator_a.jsonl", "annotator_b.jsonl", "adjudicator.jsonl")
+    report_names = ("annotator_a.report.json", "annotator_b.report.json", "agreement_report.json")
+    completed = [annotation_dir / name for name in data_names + report_names]
+    if not any(path.is_file() for path in completed):
+        return
+    if not all(path.is_file() for path in completed):
+        missing = [path.name for path in completed if not path.is_file()]
+        raise RuntimeError(f"Incomplete depth{frontier_manifest['depth']} annotation package: {', '.join(missing)}")
+
+    contexts = {row["id"]: row for row in load_jsonl(frontier_root / "context.jsonl")}
+    context_ids = sorted(contexts)
+    nuggets = {
+        row["id"]: row
+        for row in load_jsonl(paths.root / "benchmarks" / "seed50" / "provisional" / "nuggets.jsonl")
+    }
+    for name in data_names:
+        rows = load_jsonl(annotation_dir / name)
+        if [row["id"] for row in rows] != context_ids or len(rows) != len(contexts):
+            raise RuntimeError(f"Annotation coverage/order mismatch: depth{frontier_manifest['depth']}/{name}")
+        for row in rows:
+            context = contexts[row["id"]]
+            visible_spans = {
+                span_id
+                for fragment in context["span_fragments"]
+                for span_id in fragment["source_span_ids"]
+            }
+            grade = row["retrieval_grade"]
+            if grade == 0 and (row["selected_source_span_ids"] or row["selected_nugget_ids"]):
+                raise RuntimeError(f"Grade 0 cannot bind evidence: {row['id']}")
+            if grade == 1 and row["selected_nugget_ids"]:
+                raise RuntimeError(f"Grade 1 cannot bind nuggets: {row['id']}")
+            if grade >= 2 and (not row["selected_source_span_ids"] or not row["selected_nugget_ids"]):
+                raise RuntimeError(f"Positive annotation lacks evidence binding: {row['id']}")
+            if not set(row["selected_source_span_ids"]) <= visible_spans:
+                raise RuntimeError(f"Annotation selects a non-visible source span: {row['id']}")
+            if any(nuggets[nugget_id]["query_id"] != row["query_id"] for nugget_id in row["selected_nugget_ids"]):
+                raise RuntimeError(f"Annotation selects a cross-query nugget: {row['id']}")
+
+    reports = {
+        name: json.loads((annotation_dir / name).read_text(encoding="utf-8"))
+        for name in report_names
+    }
+    for data_name, report_name in zip(data_names, report_names):
+        reported_sha = reports[report_name].get("annotation_sha256") or reports[report_name].get(
+            "adjudicator_sha256"
+        ) or reports[report_name].get("input_hashes", {}).get("annotation")
+        if reported_sha != sha256_file(annotation_dir / data_name):
+            raise RuntimeError(f"Annotation report hash mismatch: depth{frontier_manifest['depth']}/{report_name}")
+
+    benchmark_root = paths.root / "benchmarks" / "seed50" / "provisional"
+    evidence_root = paths.root / "corpus" / "derived" / SNAPSHOT_ID / "evidence"
+    input_paths = {
+        "pool_manifest.json": pool_root / "manifest.json",
+        "retrieval_pool.jsonl": pool_root / "retrieval_pool.jsonl",
+        "context.jsonl": frontier_root / "context.jsonl",
+        **{
+            f"{name}.template.jsonl": annotation_dir / f"{name}.template.jsonl"
+            for name in ("annotator_a", "annotator_b", "adjudicator")
+        },
+        "queries.jsonl": benchmark_root / "queries.jsonl",
+        "nuggets.jsonl": benchmark_root / "nuggets.jsonl",
+        "judgments.jsonl": benchmark_root / "judgments.jsonl",
+        "evidence_units.jsonl": evidence_root / "evidence_units.jsonl",
+        "source_spans.jsonl": evidence_root / "source_spans.jsonl",
+    }
+    input_hashes = {name: sha256_file(path) for name, path in input_paths.items()}
+    frontier_contract_sha256 = _json_digest(frontier_manifest)
+    agreement = reports["agreement_report.json"]
+    agreement["frontier_contract_sha256"] = frontier_contract_sha256
+    agreement["input_hashes"] = input_hashes
+    write_json(annotation_dir / "agreement_report.json", agreement, paths)
+    annotation_hashes = {
+        name: sha256_file(annotation_dir / name) for name in data_names + report_names
+    }
+    package = {
+        "id": stable_id(frontier_contract_sha256, canonical_json(annotation_hashes), length=40),
+        "schema_version": 1,
+        "status": "agent_provisional_human_review_pending",
+        "depth": frontier_manifest["depth"],
+        "frontier_contract_sha256": frontier_contract_sha256,
+        "input_hashes": input_hashes,
+        "annotation_hashes": annotation_hashes,
+        "human_gold": False,
+        "human_review_complete": False,
+        "pooling_stable": False,
+        "seed_frozen": False,
+    }
+    package_path = annotation_dir / "manifest.json"
+    write_json(package_path, package, paths)
+    frontier_manifest["status"] = "agent_adjudicated_human_review_pending"
+    frontier_manifest["frontier_contract_sha256"] = frontier_contract_sha256
+    frontier_manifest["annotation_package_sha256"] = sha256_file(package_path)
+    frontier_manifest["output_hashes"].update(
+        {f"annotations/{name}": digest for name, digest in annotation_hashes.items()}
+    )
+    frontier_manifest["output_hashes"]["annotations/manifest.json"] = sha256_file(package_path)
+    write_json(frontier_root / "manifest.json", frontier_manifest, paths)
+
+
+def _ndcg10(
+    qrels: dict[str, dict[str, int]],
+    rankings: dict[str, list[dict[str, Any]]],
+) -> float:
+    run = {
+        query_id: {row["chunk_id"]: row["score"] for row in ranking}
+        for query_id, ranking in rankings.items()
+        if query_id in qrels
+    }
+    measure = ir_measures.nDCG @ 10
+    return float(ir_measures.calc_aggregate([measure], qrels, run)[measure])
+
+
+def _write_stability_report(
+    pool_root: Path,
+    pool_records: list[dict[str, Any]],
+    matrix: dict[str, Any],
+    paths: LabPaths,
+) -> None:
+    annotation_sources = [(20, pool_root / "annotations" / "adjudicator.jsonl")]
+    package_paths = [pool_root / "annotations" / "manifest.json"]
+    for depth in DEPTHS[1:]:
+        frontier_root = pool_root / "frontiers" / f"depth{depth}"
+        manifest_path = frontier_root / "manifest.json"
+        if not manifest_path.is_file():
+            break
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest["status"] != "agent_adjudicated_human_review_pending":
+            break
+        annotation_sources.append((depth, frontier_root / "annotations" / "adjudicator.jsonl"))
+        package_paths.append(frontier_root / "annotations" / "manifest.json")
+
+    candidate_by_id = {row["id"]: row for row in pool_records}
+    answerable = {
+        row["id"]
+        for row in load_jsonl(paths.root / "benchmarks" / "seed50" / "provisional" / "queries.jsonl")
+        if row["answerability"] == "answerable"
+    }
+    runs_root = paths.root / "artifacts" / "runs" / "seed50-provisional"
+    rankings = {
+        entry["run_id"]: _read_approved_trec_run(entry, runs_root / entry["run_id"])
+        for entry in matrix["runs"]
+    }
+    rows: list[dict[str, Any]] = []
+    cumulative_annotations: list[dict[str, Any]] = []
+    for depth, annotation_path in annotation_sources:
+        new_annotations = load_jsonl(annotation_path)
+        cumulative_annotations.extend(new_annotations)
+        new_positive = sum(row["retrieval_grade"] >= 2 for row in new_annotations)
+        qrels_by_config: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(dict))
+        for annotation in cumulative_annotations:
+            candidate = candidate_by_id[annotation["id"]]
+            if annotation["query_id"] in answerable:
+                qrels_by_config[candidate["chunk_config_id"]][annotation["query_id"]][
+                    candidate["chunk_id"]
+                ] = annotation["retrieval_grade"]
+
+        leaveouts = []
+        full_orders: dict[str, list[str]] = {}
+        for config_id in sorted(qrels_by_config):
+            entries = [entry for entry in matrix["runs"] if entry["chunk_config_id"] == config_id]
+            full_scores = {
+                entry["system"]: _ndcg10(dict(qrels_by_config[config_id]), rankings[entry["run_id"]])
+                for entry in entries
+            }
+            full_order = _system_order(full_scores)
+            full_orders[config_id] = full_order
+            for heldout in entries:
+                exclusive = {
+                    (candidate["query_id"], candidate["chunk_id"])
+                    for candidate in pool_records
+                    if candidate["chunk_config_id"] == config_id
+                    and candidate["first_pool_depth"] <= depth
+                    and {
+                        hit["run_id"]
+                        for hit in candidate["run_hits"]
+                        if hit["rank"] <= depth
+                    }
+                    == {heldout["run_id"]}
+                }
+                reduced = {
+                    query_id: {
+                        chunk_id: grade
+                        for chunk_id, grade in judgments.items()
+                        if (query_id, chunk_id) not in exclusive
+                    }
+                    for query_id, judgments in qrels_by_config[config_id].items()
+                }
+                reduced_scores = {
+                    entry["system"]: _ndcg10(reduced, rankings[entry["run_id"]])
+                    for entry in entries
+                }
+                reduced_order = _system_order(reduced_scores)
+                leaveouts.append(
+                    {
+                        "chunk_config_id": config_id,
+                        "held_out_run_id": heldout["run_id"],
+                        "held_out_system": heldout["system"],
+                        "exclusive_judgments_removed": len(exclusive),
+                        "kendall_tau": _order_tau(full_order, reduced_order),
+                        "system_order": reduced_order,
+                    }
+                )
+        minimum_tau = min(row["kendall_tau"] for row in leaveouts)
+        rows.append(
+            {
+                "depth": depth,
+                "new_judged_items": len(new_annotations),
+                "new_grade_2_or_3_items": new_positive,
+                "new_grade_2_or_3_yield": new_positive / len(new_annotations),
+                "cumulative_judged_items": len(cumulative_annotations),
+                "leave_one_run_out_min_kendall_tau": minimum_tau,
+                "full_system_order_by_chunk_config": full_orders,
+                "leave_one_run_out": leaveouts,
+            }
+        )
+
+    agent_stable = _agent_pool_is_stable(rows)
+    report = {
+        "schema_version": 1,
+        "status": "agent_diagnostic_stable_human_review_pending"
+        if agent_stable
+        else "pending_additional_adjudicated_depths",
+        "depths_completed": [row["depth"] for row in rows],
+        "stability_rule": {
+            "consecutive_added_depths": 2,
+            "new_grade_2_or_3_yield_below": 0.01,
+            "leave_one_run_out_kendall_tau_at_least": 0.95,
+        },
+        "depth_results": rows,
+        "agent_diagnostic_pooling_stable": agent_stable,
+        "pooling_stable": False,
+        "human_review_complete": False,
+        "seed_frozen": False,
+    }
+    stability_root = pool_root / "stability"
+    write_json(stability_root / "report.json", report, paths)
+    package_hashes = {
+        str(path.relative_to(pool_root)).replace("\\", "/"): sha256_file(path)
+        for path in package_paths
+    }
+    write_json(
+        stability_root / "manifest.json",
+        {
+            "id": stable_id(matrix["id"], canonical_json(package_hashes), canonical_json(report), length=40),
+            "schema_version": 1,
+            "status": report["status"],
+            "matrix_id": matrix["id"],
+            "annotation_package_hashes": package_hashes,
+            "report_sha256": sha256_file(stability_root / "report.json"),
+            "agent_diagnostic_pooling_stable": agent_stable,
+            "pooling_stable": False,
+            "human_review_complete": False,
+            "seed_frozen": False,
+        },
+        paths,
+    )
 
 
 def build_pool(paths: LabPaths | None = None) -> dict[str, Any]:
@@ -356,5 +815,9 @@ def build_pool(paths: LabPaths | None = None) -> dict[str, Any]:
         "sota_claims_allowed": False,
         "output_hashes": outputs,
     }
+    manifest = _seal_completed_annotations(output, manifest, benchmark_root, evidence_root, paths)
     write_json(output / "manifest.json", manifest, paths)
+    approval_path = paths.root / "reviews" / "p3b-depth20-agent-annotations" / "approval.json"
+    if approval_path.is_file():
+        _write_future_frontiers(output, manifest, pool_records, chunks_by_config, matrix, paths)
     return manifest

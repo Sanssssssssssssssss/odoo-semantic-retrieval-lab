@@ -20,11 +20,15 @@ from osrlab.extraction import EvidenceCollector, _normalize_rendered
 from osrlab.jsonio import sha256_file, write_json, write_jsonl
 from osrlab.paths import LabPaths, PathBoundaryError
 from osrlab.pooling import (
+    _agent_pool_is_stable,
     _application_family,
     _is_wrong_version_candidate,
+    _order_tau,
     _run_provenance,
+    _system_order,
     _true_sibling_headings,
 )
+from osrlab.performance import _framework_overhead, _percentiles, _runtime_initialization_ns
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
 
 
@@ -466,3 +470,55 @@ def test_wrong_version_requires_explicit_reason_and_judged_nonrelevance() -> Non
     assert not _is_wrong_version_candidate(query, None)
     assert not _is_wrong_version_candidate(query, 2)
     assert not _is_wrong_version_candidate({"no_answer_reason": "out_of_scope"}, 0)
+
+
+def test_pool_stability_requires_two_consecutive_added_depths() -> None:
+    rows = [
+        {"new_grade_2_or_3_yield": 0.02, "leave_one_run_out_min_kendall_tau": 1.0},
+        {"new_grade_2_or_3_yield": 0.009, "leave_one_run_out_min_kendall_tau": 1.0},
+        {"new_grade_2_or_3_yield": 0.008, "leave_one_run_out_min_kendall_tau": 1.0},
+    ]
+    assert _agent_pool_is_stable(rows)
+    rows[-1]["leave_one_run_out_min_kendall_tau"] = 0.94
+    assert not _agent_pool_is_stable(rows)
+
+
+def test_pool_system_order_and_kendall_tau_are_deterministic() -> None:
+    reference = _system_order({"E1": 0.5, "E0": 0.5, "E2": 0.4})
+    assert reference == ["E0", "E1", "E2"]
+    assert _order_tau(reference, reference) == pytest.approx(1.0)
+
+
+def test_performance_percentiles_use_milliseconds() -> None:
+    summary = _percentiles([1_000_000, 2_000_000, 3_000_000, 4_000_000])
+    assert summary["p50_ms"] == pytest.approx(2.5)
+    assert summary["p99_ms"] == pytest.approx(3.97)
+
+
+def test_performance_framework_overhead_excludes_request_time() -> None:
+    overhead, fraction = _framework_overhead(10_000, [4_500, 4_500])
+    assert overhead == 1_000
+    assert fraction == pytest.approx(0.1)
+
+
+def test_performance_cold_load_includes_full_runtime_initialization() -> None:
+    old_receipt = {"resource_samples": [{"monotonic_ns": 100}, {"monotonic_ns": 350}]}
+    assert _runtime_initialization_ns(old_receipt) == 250
+    assert _runtime_initialization_ns({"runtime_initialization_duration_ns": 400}) == 400
+
+
+def test_depth20_annotation_package_binds_all_inputs_and_outputs() -> None:
+    root = LabPaths.discover().root
+    pool = root / "benchmarks" / "seed50" / "pooling" / "provisional"
+    manifest = json.loads((pool / "manifest.json").read_text(encoding="utf-8"))
+    package_path = pool / "annotations" / "manifest.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    assert manifest["annotation_package_sha256"] == sha256_file(package_path)
+    assert package["human_review_complete"] is package["pooling_stable"] is package["seed_frozen"] is False
+    for name, digest in package["annotation_hashes"].items():
+        assert sha256_file(pool / "annotations" / name) == digest
+    agreement = json.loads(
+        (pool / "annotations" / "agreement_report.json").read_text(encoding="utf-8")
+    )
+    assert agreement["pool_contract_sha256"] == package["pool_contract_sha256"]
+    assert agreement["input_hashes"] == package["input_hashes"]

@@ -1,0 +1,605 @@
+{
+  "annotation_sha256": "6407113b9b1e04d564f1b4c57c09a66b38d7d6932893afe38ec3eed1c0ea647c",
+  "annotation_status": "completed_agent_prelabel",
+  "annotator_b_template_sha256": "f666696c293c62b9fde44b33118bb31d2c3e103356b778a4cf97ccba8554bd01",
+  "annotator_id": "pool-annotator-b",
+  "blind_independent_execution": true,
+  "candidate_count": 7288,
+  "context_template_id_sets_equal": true,
+  "contract_corrections": {
+    "grade_0_or_1_nugget_bindings_cleared": 4,
+    "report_hash_bindings_added": [
+      "annotation_sha256",
+      "depth20_context_sha256",
+      "annotator_b_template_sha256"
+    ]
+  },
+  "depth20_context_sha256": "7f246f51cd687519885a041f2b37ff3b82b2c1a895903316df1533988298092a",
+  "duplicate_ids": 0,
+  "grade_distribution": {
+    "0": 4627,
+    "1": 2053,
+    "2": 79,
+    "3": 529
+  },
+  "grade_zero_has_no_selections": true,
+  "grade_zero_or_one_has_no_nugget_bindings": true,
+  "limitations": [
+    "This is an independent Agent prelabel for heterogeneous pooling, not human gold.",
+    "Conservative rubric-assisted review can miss an unusual paraphrase; adjudication and required human review remain authoritative.",
+    "SourceSpan IDs cover EvidenceUnits, so positivity was evaluated on exact character fragments before span selection to avoid crediting unseen text."
+  ],
+  "method": [
+    "Blind annotation: annotator A and adjudicator outputs were not read.",
+    "All 50 topics were assessed with separate direct-answer and topic-only rubrics derived from the query, provisional nuggets, canonical judgments, and exact chunk fragment text.",
+    "All prepopulated canonical grades and selected references were independently checked and preserved; a row was raised only when another fragment supplied stronger evidence.",
+    "Obvious zero candidates were batch-triaged; every unique grade 2/3 span was then reviewed by query, with wrong-condition and incomplete-step cases downgraded.",
+    "Frozen canonical judgments were retained only for complete fragment coverage; alternative direct statements were judged independently.",
+    "Every record was checked for total coverage, stable order, context-local span references, same-query nugget references, grade/selection invariants, and grade 0/1 empty nugget bindings."
+  ],
+  "mutual_blindness_declaration": "Annotator B independently completed this prelabel without reading annotator A or adjudicator outputs.",
+  "per_query": [
+    {
+      "candidates": 152,
+      "grade_distribution": {
+        "0": 121,
+        "1": 23,
+        "3": 8
+      },
+      "query_id": "seed-S001",
+      "selected_nugget_count": 8,
+      "selected_span_count": 41
+    },
+    {
+      "candidates": 142,
+      "grade_distribution": {
+        "0": 86,
+        "1": 48,
+        "3": 8
+      },
+      "query_id": "seed-S002",
+      "selected_nugget_count": 8,
+      "selected_span_count": 84
+    },
+    {
+      "candidates": 130,
+      "grade_distribution": {
+        "0": 34,
+        "1": 76,
+        "3": 20
+      },
+      "query_id": "seed-S003",
+      "selected_nugget_count": 20,
+      "selected_span_count": 231
+    },
+    {
+      "candidates": 120,
+      "grade_distribution": {
+        "0": 2,
+        "1": 66,
+        "3": 52
+      },
+      "query_id": "seed-S004",
+      "selected_nugget_count": 52,
+      "selected_span_count": 389
+    },
+    {
+      "candidates": 132,
+      "grade_distribution": {
+        "0": 112,
+        "1": 15,
+        "3": 5
+      },
+      "query_id": "seed-S005",
+      "selected_nugget_count": 5,
+      "selected_span_count": 31
+    },
+    {
+      "candidates": 137,
+      "grade_distribution": {
+        "0": 53,
+        "1": 84
+      },
+      "query_id": "seed-S006",
+      "selected_nugget_count": 0,
+      "selected_span_count": 150
+    },
+    {
+      "candidates": 134,
+      "grade_distribution": {
+        "0": 114,
+        "1": 12,
+        "3": 8
+      },
+      "query_id": "seed-S007",
+      "selected_nugget_count": 8,
+      "selected_span_count": 33
+    },
+    {
+      "candidates": 179,
+      "grade_distribution": {
+        "0": 118,
+        "1": 26,
+        "2": 3,
+        "3": 32
+      },
+      "query_id": "seed-S008",
+      "selected_nugget_count": 55,
+      "selected_span_count": 157
+    },
+    {
+      "candidates": 122,
+      "grade_distribution": {
+        "0": 1,
+        "1": 80,
+        "3": 41
+      },
+      "query_id": "seed-S009",
+      "selected_nugget_count": 41,
+      "selected_span_count": 300
+    },
+    {
+      "candidates": 154,
+      "grade_distribution": {
+        "0": 82,
+        "1": 45,
+        "3": 27
+      },
+      "query_id": "seed-S010",
+      "selected_nugget_count": 31,
+      "selected_span_count": 188
+    },
+    {
+      "candidates": 145,
+      "grade_distribution": {
+        "0": 108,
+        "1": 24,
+        "3": 13
+      },
+      "query_id": "seed-S011",
+      "selected_nugget_count": 13,
+      "selected_span_count": 88
+    },
+    {
+      "candidates": 126,
+      "grade_distribution": {
+        "0": 94,
+        "1": 28,
+        "3": 4
+      },
+      "query_id": "seed-S012",
+      "selected_nugget_count": 8,
+      "selected_span_count": 89
+    },
+    {
+      "candidates": 141,
+      "grade_distribution": {
+        "0": 128,
+        "1": 6,
+        "3": 7
+      },
+      "query_id": "seed-S013",
+      "selected_nugget_count": 7,
+      "selected_span_count": 19
+    },
+    {
+      "candidates": 173,
+      "grade_distribution": {
+        "0": 161,
+        "1": 12
+      },
+      "query_id": "seed-S014",
+      "selected_nugget_count": 0,
+      "selected_span_count": 13
+    },
+    {
+      "candidates": 123,
+      "grade_distribution": {
+        "0": 25,
+        "1": 54,
+        "2": 5,
+        "3": 39
+      },
+      "query_id": "seed-S015",
+      "selected_nugget_count": 88,
+      "selected_span_count": 174
+    },
+    {
+      "candidates": 145,
+      "grade_distribution": {
+        "0": 79,
+        "1": 40,
+        "2": 4,
+        "3": 22
+      },
+      "query_id": "seed-S016",
+      "selected_nugget_count": 51,
+      "selected_span_count": 140
+    },
+    {
+      "candidates": 113,
+      "grade_distribution": {
+        "0": 57,
+        "1": 51,
+        "3": 5
+      },
+      "query_id": "seed-S017",
+      "selected_nugget_count": 5,
+      "selected_span_count": 92
+    },
+    {
+      "candidates": 129,
+      "grade_distribution": {
+        "0": 56,
+        "1": 41,
+        "2": 8,
+        "3": 24
+      },
+      "query_id": "seed-S018",
+      "selected_nugget_count": 54,
+      "selected_span_count": 161
+    },
+    {
+      "candidates": 141,
+      "grade_distribution": {
+        "0": 113,
+        "1": 16,
+        "3": 12
+      },
+      "query_id": "seed-S019",
+      "selected_nugget_count": 23,
+      "selected_span_count": 54
+    },
+    {
+      "candidates": 166,
+      "grade_distribution": {
+        "0": 101,
+        "1": 60,
+        "3": 5
+      },
+      "query_id": "seed-S020",
+      "selected_nugget_count": 5,
+      "selected_span_count": 203
+    },
+    {
+      "candidates": 115,
+      "grade_distribution": {
+        "0": 12,
+        "1": 77,
+        "2": 7,
+        "3": 19
+      },
+      "query_id": "seed-S021",
+      "selected_nugget_count": 35,
+      "selected_span_count": 299
+    },
+    {
+      "candidates": 134,
+      "grade_distribution": {
+        "0": 54,
+        "1": 57,
+        "2": 16,
+        "3": 7
+      },
+      "query_id": "seed-S022",
+      "selected_nugget_count": 25,
+      "selected_span_count": 192
+    },
+    {
+      "candidates": 157,
+      "grade_distribution": {
+        "0": 128,
+        "1": 25,
+        "3": 4
+      },
+      "query_id": "seed-S023",
+      "selected_nugget_count": 4,
+      "selected_span_count": 36
+    },
+    {
+      "candidates": 176,
+      "grade_distribution": {
+        "0": 165,
+        "1": 7,
+        "3": 4
+      },
+      "query_id": "seed-S024",
+      "selected_nugget_count": 4,
+      "selected_span_count": 19
+    },
+    {
+      "candidates": 127,
+      "grade_distribution": {
+        "0": 59,
+        "1": 64,
+        "3": 4
+      },
+      "query_id": "seed-S025",
+      "selected_nugget_count": 4,
+      "selected_span_count": 134
+    },
+    {
+      "candidates": 157,
+      "grade_distribution": {
+        "0": 116,
+        "1": 29,
+        "2": 8,
+        "3": 4
+      },
+      "query_id": "seed-S026",
+      "selected_nugget_count": 12,
+      "selected_span_count": 83
+    },
+    {
+      "candidates": 162,
+      "grade_distribution": {
+        "0": 54,
+        "1": 104,
+        "3": 4
+      },
+      "query_id": "seed-S027",
+      "selected_nugget_count": 4,
+      "selected_span_count": 214
+    },
+    {
+      "candidates": 172,
+      "grade_distribution": {
+        "0": 126,
+        "1": 46
+      },
+      "query_id": "seed-S028",
+      "selected_nugget_count": 0,
+      "selected_span_count": 84
+    },
+    {
+      "candidates": 139,
+      "grade_distribution": {
+        "0": 49,
+        "1": 86,
+        "3": 4
+      },
+      "query_id": "seed-S029",
+      "selected_nugget_count": 4,
+      "selected_span_count": 432
+    },
+    {
+      "candidates": 117,
+      "grade_distribution": {
+        "0": 20,
+        "1": 69,
+        "2": 12,
+        "3": 16
+      },
+      "query_id": "seed-S030",
+      "selected_nugget_count": 28,
+      "selected_span_count": 184
+    },
+    {
+      "candidates": 144,
+      "grade_distribution": {
+        "0": 115,
+        "1": 17,
+        "3": 12
+      },
+      "query_id": "seed-S031",
+      "selected_nugget_count": 12,
+      "selected_span_count": 29
+    },
+    {
+      "candidates": 162,
+      "grade_distribution": {
+        "0": 150,
+        "1": 7,
+        "3": 5
+      },
+      "query_id": "seed-S032",
+      "selected_nugget_count": 5,
+      "selected_span_count": 17
+    },
+    {
+      "candidates": 172,
+      "grade_distribution": {
+        "0": 141,
+        "1": 31
+      },
+      "query_id": "seed-S033",
+      "selected_nugget_count": 0,
+      "selected_span_count": 58
+    },
+    {
+      "candidates": 180,
+      "grade_distribution": {
+        "0": 121,
+        "1": 59
+      },
+      "query_id": "seed-S034",
+      "selected_nugget_count": 0,
+      "selected_span_count": 188
+    },
+    {
+      "candidates": 124,
+      "grade_distribution": {
+        "0": 71,
+        "1": 37,
+        "3": 16
+      },
+      "query_id": "seed-S035",
+      "selected_nugget_count": 16,
+      "selected_span_count": 70
+    },
+    {
+      "candidates": 156,
+      "grade_distribution": {
+        "0": 126,
+        "1": 21,
+        "2": 1,
+        "3": 8
+      },
+      "query_id": "seed-S036",
+      "selected_nugget_count": 9,
+      "selected_span_count": 37
+    },
+    {
+      "candidates": 138,
+      "grade_distribution": {
+        "0": 92,
+        "1": 17,
+        "3": 29
+      },
+      "query_id": "seed-S037",
+      "selected_nugget_count": 39,
+      "selected_span_count": 98
+    },
+    {
+      "candidates": 140,
+      "grade_distribution": {
+        "0": 17,
+        "1": 107,
+        "2": 3,
+        "3": 13
+      },
+      "query_id": "seed-S038",
+      "selected_nugget_count": 19,
+      "selected_span_count": 458
+    },
+    {
+      "candidates": 164,
+      "grade_distribution": {
+        "0": 137,
+        "1": 23,
+        "3": 4
+      },
+      "query_id": "seed-S039",
+      "selected_nugget_count": 4,
+      "selected_span_count": 40
+    },
+    {
+      "candidates": 133,
+      "grade_distribution": {
+        "0": 81,
+        "1": 52
+      },
+      "query_id": "seed-S040",
+      "selected_nugget_count": 0,
+      "selected_span_count": 108
+    },
+    {
+      "candidates": 140,
+      "grade_distribution": {
+        "0": 117,
+        "1": 12,
+        "2": 3,
+        "3": 8
+      },
+      "query_id": "seed-S041",
+      "selected_nugget_count": 15,
+      "selected_span_count": 32
+    },
+    {
+      "candidates": 111,
+      "grade_distribution": {
+        "0": 11,
+        "1": 83,
+        "2": 9,
+        "3": 8
+      },
+      "query_id": "seed-S042",
+      "selected_nugget_count": 21,
+      "selected_span_count": 211
+    },
+    {
+      "candidates": 133,
+      "grade_distribution": {
+        "0": 95,
+        "1": 34,
+        "3": 4
+      },
+      "query_id": "seed-S043",
+      "selected_nugget_count": 4,
+      "selected_span_count": 41
+    },
+    {
+      "candidates": 158,
+      "grade_distribution": {
+        "0": 134,
+        "1": 8,
+        "3": 16
+      },
+      "query_id": "seed-S044",
+      "selected_nugget_count": 16,
+      "selected_span_count": 28
+    },
+    {
+      "candidates": 154,
+      "grade_distribution": {
+        "0": 107,
+        "1": 47
+      },
+      "query_id": "seed-S045",
+      "selected_nugget_count": 0,
+      "selected_span_count": 87
+    },
+    {
+      "candidates": 174,
+      "grade_distribution": {
+        "0": 162,
+        "1": 8,
+        "3": 4
+      },
+      "query_id": "seed-S046",
+      "selected_nugget_count": 4,
+      "selected_span_count": 21
+    },
+    {
+      "candidates": 153,
+      "grade_distribution": {
+        "0": 148,
+        "1": 1,
+        "3": 4
+      },
+      "query_id": "seed-S047",
+      "selected_nugget_count": 4,
+      "selected_span_count": 8
+    },
+    {
+      "candidates": 162,
+      "grade_distribution": {
+        "0": 141,
+        "1": 21
+      },
+      "query_id": "seed-S048",
+      "selected_nugget_count": 0,
+      "selected_span_count": 42
+    },
+    {
+      "candidates": 167,
+      "grade_distribution": {
+        "0": 159,
+        "1": 8
+      },
+      "query_id": "seed-S049",
+      "selected_nugget_count": 0,
+      "selected_span_count": 13
+    },
+    {
+      "candidates": 163,
+      "grade_distribution": {
+        "0": 74,
+        "1": 89
+      },
+      "query_id": "seed-S050",
+      "selected_nugget_count": 0,
+      "selected_span_count": 118
+    }
+  ],
+  "positive_has_selected_spans": true,
+  "prefilled_canonical_rows": 303,
+  "prefilled_canonical_rows_downgraded": 0,
+  "prefilled_canonical_rows_preserved": 303,
+  "prefilled_canonical_rows_raised_after_independent_review": 17,
+  "prefilled_selected_spans_preserved": true,
+  "query_nugget_bindings_valid": true,
+  "selected_nugget_refs_valid": true,
+  "selected_source_span_refs_valid": true,
+  "semantic_boundary_corrections": 282
+}
