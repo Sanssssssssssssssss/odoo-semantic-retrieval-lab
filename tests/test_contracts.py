@@ -19,6 +19,12 @@ from osrlab.chunking import _c1_scoring_windows, _c3, _chunk_configs, _make_chun
 from osrlab.extraction import EvidenceCollector, _normalize_rendered
 from osrlab.jsonio import sha256_file, write_json, write_jsonl
 from osrlab.paths import LabPaths, PathBoundaryError
+from osrlab.pooling import (
+    _application_family,
+    _is_wrong_version_candidate,
+    _run_provenance,
+    _true_sibling_headings,
+)
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
 
 
@@ -423,3 +429,40 @@ def test_refresh_preflights_every_run_before_any_write(tmp_path: Path) -> None:
         rankings = _preflight_persisted_rankings(entries, tmp_path, {"q"})
         write_calls.extend(rankings)
     assert write_calls == []
+
+
+def test_pool_provenance_is_system_specific_and_canonical() -> None:
+    assert _run_provenance("E0-BM25") == "lexical_candidate"
+    assert _run_provenance("E1-dense-exact") == "semantic_candidate"
+    assert _run_provenance("E3-rerank") == "rerank_candidate"
+    assert _application_family("documentation/content/applications/finance/accounting.rst") == "finance"
+
+
+def test_expert_siblings_are_adjacent_heading_units_only() -> None:
+    headings = [
+        {
+            "id": value,
+            "node_type": "heading",
+            "source_document_id": "doc",
+            "section_id": value,
+            "parent_section_id": "parent",
+            "ordinal": index,
+        }
+        for index, value in enumerate(("left", "middle", "right"))
+    ]
+    by_section = {("doc", item["section_id"]): item for item in headings}
+    by_parent = {("doc", "parent"): headings}
+    paragraph = {**headings[1], "id": "paragraph", "node_type": "paragraph"}
+    assert [item["id"] for item in _true_sibling_headings(paragraph, by_section, by_parent)] == [
+        "left",
+        "right",
+    ]
+
+
+def test_wrong_version_requires_explicit_reason_and_judged_nonrelevance() -> None:
+    query = {"no_answer_reason": "wrong_version"}
+    assert _is_wrong_version_candidate(query, 0)
+    assert _is_wrong_version_candidate(query, 1)
+    assert not _is_wrong_version_candidate(query, None)
+    assert not _is_wrong_version_candidate(query, 2)
+    assert not _is_wrong_version_candidate({"no_answer_reason": "out_of_scope"}, 0)

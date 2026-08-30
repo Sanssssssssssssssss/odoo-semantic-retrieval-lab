@@ -9,6 +9,7 @@ from .chunking import chunk_twice
 from .extraction import extract_twice
 from .gates import require_approval
 from .paths import LabPaths
+from .pooling import build_pool
 from .receipts import create_environment_receipt
 from .smoke import run_smoke
 from .verify import verify_source
@@ -51,5 +52,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "baseline":
         require_approval("p3a", paths)
         print(json.dumps(run_provisional_matrix(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "pool":
+        print(json.dumps(build_pool(paths), indent=2, ensure_ascii=False))
         return 0
     raise SystemExit(f"Command '{args.command}' is gated until its implementation phase is approved")
