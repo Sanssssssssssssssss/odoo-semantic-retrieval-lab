@@ -208,9 +208,46 @@
         "status": {"enum": ["provisional", "frozen"]}
       }
     },
-    "EvidenceCard": {"type": "object", "required": ["query_id", "rank", "chunk_id", "source_uri", "excerpt", "token_count"]},
-    "RunManifest": {"type": "object", "required": ["id", "system", "corpus_hash", "benchmark_hash", "config_hash"]},
-    "StageTiming": {"type": "object", "required": ["run_id", "query_id", "stage", "duration_ns"]},
-    "ResourceSample": {"type": "object", "required": ["run_id", "monotonic_ns", "rss_bytes"]}
+    "EvidenceCard": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "query_id", "rank", "chunk_id", "retrieval_score", "source_uri", "anchor", "excerpt", "token_count", "cumulative_token_count", "source_span_ids", "span_fragments", "truncated", "cut"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "query_id": {"type": "string"},
+        "rank": {"type": "integer", "minimum": 1}, "chunk_id": {"type": "string"}, "retrieval_score": {"type": "number"},
+        "source_uri": {"type": "string"}, "anchor": {"type": ["string", "null"]}, "excerpt": {"type": "string", "minLength": 1},
+        "token_count": {"type": "integer", "minimum": 1, "maximum": 2048},
+        "cumulative_token_count": {"type": "integer", "minimum": 1, "maximum": 2048},
+        "source_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "span_fragments": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/SpanFragment"}},
+        "truncated": {"type": "boolean"}, "cut": {"type": ["object", "null"]}
+      }
+    },
+    "RunManifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "system", "source_snapshot_id", "chunk_config_id", "chunk_config_hash", "corpus_hash", "benchmark_hash", "config_hash", "query_set", "status", "run_tag", "acquisition_included", "output_hashes"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "system": {"type": "string"},
+        "source_snapshot_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "chunk_config_id": {"type": "string"},
+        "chunk_config_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "corpus_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "benchmark_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "config_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "query_set": {"type": "string"},
+        "status": {"type": "string"}, "run_tag": {"type": "string"}, "acquisition_included": {"type": "boolean"},
+        "output_hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+      }
+    },
+    "StageTiming": {
+      "type": "object", "additionalProperties": false,
+      "required": ["run_id", "query_id", "stage", "duration_ns"],
+      "properties": {"run_id": {"type": "string"}, "query_id": {"type": ["string", "null"]}, "stage": {"type": "string"}, "duration_ns": {"type": "integer", "minimum": 0}}
+    },
+    "ResourceSample": {
+      "type": "object", "additionalProperties": false,
+      "required": ["run_id", "query_id", "stage", "monotonic_ns", "rss_bytes", "process_tree_rss_bytes", "child_processes"],
+      "properties": {
+        "run_id": {"type": "string"}, "query_id": {"type": ["string", "null"]}, "stage": {"type": "string"},
+        "monotonic_ns": {"type": "integer", "minimum": 0}, "rss_bytes": {"type": "integer", "minimum": 0},
+        "process_tree_rss_bytes": {"type": "integer", "minimum": 0}, "child_processes": {"type": "integer", "minimum": 0}
+      }
+    }
   }
 }

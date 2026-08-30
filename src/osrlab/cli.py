@@ -9,6 +9,7 @@ from .extraction import extract_twice
 from .gates import require_approval
 from .paths import LabPaths
 from .receipts import create_environment_receipt
+from .smoke import run_smoke
 from .verify import verify_source
 
 
@@ -41,5 +42,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "chunk":
         require_approval("p1a", paths)
         print(json.dumps(chunk_twice(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "smoke":
+        require_approval("p2a", paths)
+        print(json.dumps(run_smoke(paths), indent=2, ensure_ascii=False))
         return 0
     raise SystemExit(f"Command '{args.command}' is gated until its implementation phase is approved")

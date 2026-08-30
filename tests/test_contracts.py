@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import numpy as np
 from docutils import nodes
 
 from osrlab.contract import validate_record
@@ -12,6 +13,7 @@ from osrlab.chunking import _c1_scoring_windows, _c3, _chunk_configs, _make_chun
 from osrlab.extraction import EvidenceCollector, _normalize_rendered
 from osrlab.jsonio import write_json, write_jsonl
 from osrlab.paths import LabPaths, PathBoundaryError
+from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
 
 
 def test_path_allowlist_rejects_source_and_external_paths(tmp_path: Path) -> None:
@@ -211,3 +213,83 @@ def test_seed50_topic_briefs_match_preregistered_distribution() -> None:
     summary = validate_topic_briefs()
     assert summary["topics"] == 50
     assert summary["smoke_topics"] == 12
+
+
+def test_bm25_ties_are_broken_by_chunk_id() -> None:
+    assert _rank(np.asarray([1.0, 1.0, 2.0], dtype=np.float32), ["b", "a", "c"], 3) == [2, 1, 0]
+
+
+def test_ir_metrics_golden_fixture_uses_grade_two_binary_threshold() -> None:
+    metrics = evaluate_ranking(
+        {"q": {"a": 3, "b": 1, "c": 0}},
+        {"q": {"a": 2.0, "x": 1.0, "b": 0.5}, "no-answer": {"z": 9.0}},
+    )
+    assert metrics["ndcg_at_10"] == pytest.approx(0.9639404333166532)
+    assert metrics["p_at_3"] == pytest.approx(1 / 3)
+    assert metrics["recall_at_3"] == 1.0
+    assert metrics["mrr_at_10"] == 1.0
+    assert metrics["map"] == 1.0
+    assert metrics["judged_at_10"] == pytest.approx(2 / 3)
+    assert metrics["bpref"] == 1.0
+
+
+def test_evidence_cards_remove_duplicate_fragments_and_respect_budget() -> None:
+    fragment = {
+        "evidence_unit_id": "unit",
+        "source_span_ids": ["span"],
+        "source_uri": "https://example.invalid/doc#anchor",
+        "anchor": "anchor",
+        "unit_token_start": 0,
+        "unit_token_end": 2,
+        "chunk_token_start": 0,
+        "chunk_token_end": 2,
+        "unit_char_start": 0,
+        "unit_char_end": 10,
+    }
+    chunks = {
+        chunk_id: {
+            "id": chunk_id,
+            "source_uri": "https://example.invalid/doc#anchor",
+            "span_fragments": [fragment],
+        }
+        for chunk_id in ("chunk-a", "chunk-b")
+    }
+    cards, diagnostics = assemble_evidence_cards(
+        "query",
+        [
+            {"rank": 1, "chunk_id": "chunk-a", "score": 2.0},
+            {"rank": 2, "chunk_id": "chunk-b", "score": 1.0},
+        ],
+        chunks,
+        {"unit": {"rendered_text": "alpha beta"}},
+        token_budget=2,
+    )
+    assert [card["chunk_id"] for card in cards] == ["chunk-a"]
+    assert cards[0]["token_count"] == cards[0]["cumulative_token_count"] == 2
+    assert diagnostics["selected_tokens"] == 2
+
+
+def test_e0_uses_lexical_text_without_leaking_past_partial_fragment() -> None:
+    unit = {
+        "id": "unit",
+        "heading_path": ["Parent", "Section"],
+        "rendered_text": "alpha beta",
+        "lexical_text": "Parent > Section alpha beta",
+    }
+    base = {
+        "heading_path": ["Parent", "Section"],
+        "span_fragments": [
+            {
+                "evidence_unit_id": "unit",
+                "unit_token_start": 0,
+                "unit_token_end": 2,
+                "unit_char_start": 0,
+                "unit_char_end": 10,
+            }
+        ],
+    }
+    assert "Parent > Section alpha beta" in _lexical_chunk_text(base, {"unit": unit}, {"unit": 2})
+    base["span_fragments"][0]["unit_token_end"] = 1
+    base["span_fragments"][0]["unit_char_end"] = 5
+    partial = _lexical_chunk_text(base, {"unit": unit}, {"unit": 2})
+    assert "alpha" in partial and "beta" not in partial
