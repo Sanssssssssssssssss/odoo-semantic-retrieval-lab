@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
+from docutils import nodes
 
 from osrlab.contract import validate_record
+from osrlab.extraction import EvidenceCollector, _normalize_rendered
 from osrlab.jsonio import write_json, write_jsonl
 from osrlab.paths import LabPaths, PathBoundaryError
 
@@ -57,9 +59,9 @@ def test_source_span_schema_accepts_multi_origin() -> None:
                     "source_path": "include/shared.rst",
                     "source_sha256": digest,
                     "start_line": 1,
-                    "start_column": None,
-                    "end_line": None,
-                    "end_column": None,
+                    "start_column": 1,
+                    "end_line": 1,
+                    "end_column": 2,
                     "anchor": None,
                     "quote_sha256": digest,
                     "origin_kind": "include",
@@ -67,3 +69,35 @@ def test_source_span_schema_accepts_multi_origin() -> None:
             ],
         },
     )
+
+
+def test_rendered_text_normalization_is_stable() -> None:
+    assert _normalize_rendered("\r\nAlpha  \r\n\r\n\r\nBeta\r\n") == "Alpha\n\nBeta"
+
+
+def test_tab_label_is_preserved_as_structure_context() -> None:
+    tabs = nodes.container(classes=["sphinx-tabs"])
+    tab = nodes.container()
+    label = nodes.container()
+    label += nodes.paragraph(text="Structure")
+    content = nodes.paragraph(text="Insert a table")
+    tab += label
+    tab += content
+    tabs += tab
+    assert EvidenceCollector._structure_context(content) == [{"kind": "tab", "label": "Structure"}]
+
+
+def test_rawsource_location_handles_directive_indentation(tmp_path: Path) -> None:
+    paths = LabPaths(tmp_path)
+    source = paths.docs / "content" / "sample.rst"
+    source.parent.mkdir(parents=True)
+    source.write_text(".. code-block:: xml\n\n   <field a=\"1\"/>\n   <field b=\"2\"/>\n", encoding="utf-8")
+    collector = EvidenceCollector(paths)
+    assert collector._locate_rawsource(source, '<field a="1"/>\n<field b="2"/>', hint_line=1) == 3
+
+
+def test_discrete_source_ranges_are_not_bridged() -> None:
+    assert EvidenceCollector._merge_ranges([(447, 447), (448, 449), (1536, 1536)]) == [
+        (447, 449),
+        (1536, 1536),
+    ]

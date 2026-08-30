@@ -20,8 +20,14 @@ dependencies = [
   "pygments~=2.6.1",
   "scipy>=1.12,<2",
   "sentence-transformers>=5,<6",
+  "setuptools<81",
   "sphinx==4.3.2",
   "sphinx-tabs==3.4.5",
+  "sphinxcontrib-applehelp==1.0.4",
+  "sphinxcontrib-devhelp==1.0.2",
+  "sphinxcontrib-htmlhelp==2.0.0",
+  "sphinxcontrib-qthelp==1.0.3",
+  "sphinxcontrib-serializinghtml==1.1.5",
   "torch>=2.7,<3",
   "transformers>=4.52,<5",
 ]
@@ -31,6 +37,15 @@ dev = ["pytest>=8.3,<10"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/osrlab"]
+
+[tool.uv]
+override-dependencies = [
+  "sphinxcontrib-applehelp==1.0.4",
+  "sphinxcontrib-devhelp==1.0.2",
+  "sphinxcontrib-htmlhelp==2.0.0",
+  "sphinxcontrib-qthelp==1.0.3",
+  "sphinxcontrib-serializinghtml==1.1.5",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,7 +5,7 @@
     "SpanRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_path", "source_sha256", "start_line", "origin_kind", "quote_sha256"],
+      "required": ["source_path", "source_sha256", "start_line", "start_column", "end_line", "end_column", "anchor", "origin_kind", "quote_sha256"],
       "properties": {
         "source_path": {"type": "string", "minLength": 1},
         "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -30,15 +30,17 @@
     },
     "SourceDocument": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["id", "source_snapshot_id", "source_path", "source_sha256", "public_uri"],
       "properties": {
         "id": {"type": "string"}, "source_snapshot_id": {"type": "string"},
-        "source_path": {"type": "string"}, "source_sha256": {"type": "string"},
+        "source_path": {"type": "string"}, "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "public_uri": {"type": "string"}, "scope": {"type": "string"}
       }
     },
     "SourceSpan": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["id", "source_document_id", "span_refs"],
       "properties": {
         "id": {"type": "string"}, "source_document_id": {"type": "string"},
@@ -47,13 +49,19 @@
     },
     "EvidenceUnit": {
       "type": "object",
-      "required": ["id", "source_document_id", "source_span_ids", "node_type", "ordinal", "rendered_text", "lexical_text", "content_sha256"],
+      "additionalProperties": false,
+      "required": ["id", "source_document_id", "source_span_ids", "node_type", "ordinal", "heading_path", "section_id", "parent_section_id", "anchor", "anchors", "source_uri", "structure_context", "rendered_text", "lexical_text", "cross_references", "content_sha256"],
       "properties": {
         "id": {"type": "string"}, "source_document_id": {"type": "string"},
         "source_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
         "node_type": {"type": "string"}, "ordinal": {"type": "integer", "minimum": 0},
         "heading_path": {"type": "array", "items": {"type": "string"}},
+        "section_id": {"type": "string"}, "parent_section_id": {"type": ["string", "null"]},
+        "anchor": {"type": ["string", "null"]}, "anchors": {"type": "array", "items": {"type": "string"}},
+        "source_uri": {"type": "string"},
+        "structure_context": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["kind", "label"], "properties": {"kind": {"enum": ["tab"]}, "label": {"type": "string"}}}},
         "rendered_text": {"type": "string"}, "lexical_text": {"type": "string"},
+        "cross_references": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["text", "target"], "properties": {"text": {"type": "string"}, "target": {"type": "string"}}}},
         "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
