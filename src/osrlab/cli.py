@@ -4,6 +4,7 @@ import argparse
 import json
 from collections.abc import Sequence
 
+from .chunking import chunk_twice
 from .extraction import extract_twice
 from .gates import require_approval
 from .paths import LabPaths
@@ -36,5 +37,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "extract":
         require_approval("p0", paths)
         print(json.dumps(extract_twice(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "chunk":
+        require_approval("p1a", paths)
+        print(json.dumps(chunk_twice(paths), indent=2, ensure_ascii=False))
         return 0
     raise SystemExit(f"Command '{args.command}' is gated until its implementation phase is approved")
