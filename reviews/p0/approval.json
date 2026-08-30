@@ -1,0 +1,1 @@
+{"decision":"APPROVE","phase":"p0","reviewer":"p0_delivery_reviewer","schema_version":1,"verified":["path-boundary-and-parent-traversal","writer-allowlist","detached-clean-pinned-source","environment-and-protected-project-receipt","python-3.10-uv-lock-offline-sync","single-root-cli","pytest-4-pass"]}
