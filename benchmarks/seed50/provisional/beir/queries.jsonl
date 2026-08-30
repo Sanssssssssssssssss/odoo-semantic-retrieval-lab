@@ -1,0 +1,50 @@
+{"_id":"seed-S001","text":"Which literal unsubscribe path must be added manually when an Odoo Email Marketing mailing uses the Start From Scratch template?"}
+{"_id":"seed-S002","text":"Which maintenance-request field prevents work orders and other maintenance from being scheduled at the selected work center while the request is processed?"}
+{"_id":"seed-S003","text":"What exact menu path opens the list where a new Quality Control Point is created?"}
+{"_id":"seed-S004","text":"Which exact Track Inventory option configures one unique serial number per product?"}
+{"_id":"seed-S005","text":"To which named stage should a failed maintenance request be moved?"}
+{"_id":"seed-S006","text":"What is the documented hard maximum number of Helpdesk tickets that one Odoo 19 database can store?"}
+{"_id":"seed-S007","text":"Which product Purchase control policy must be selected before 3-way matching can compare a vendor bill with received quantities?"}
+{"_id":"seed-S008","text":"Before a product can be sold by dropshipping, which Purchase setting and product-level sales, purchase, vendor, and route configurations are required?"}
+{"_id":"seed-S009","text":"Which Inventory setting must be enabled before products can be tracked by lots or serial numbers?"}
+{"_id":"seed-S010","text":"Which two Manufacturing settings must be enabled, and in what dependency order, to configure work-order dependencies?"}
+{"_id":"seed-S011","text":"What Sales feature must be activated before a customer can confirm an order with an online signature?"}
+{"_id":"seed-S012","text":"For Spreadsheet and Worksheet Quality Control Point check types, which template and success fields are required for each type?"}
+{"_id":"seed-S013","text":"What feature must be enabled on a Helpdesk team before an agent can plan an onsite intervention from a ticket?"}
+{"_id":"seed-S014","text":"Which operating-system packages must be installed before building Odoo 19 from source on Fedora 42?"}
+{"_id":"seed-S015","text":"How do you create and apply a new single-line physical inventory adjustment for a lot-tracked product, from opening Physical Inventory through recording the counted quantity?"}
+{"_id":"seed-S016","text":"After receiving a purchase order, what ordered steps create, compute, and validate a landed cost from its vendor bill?"}
+{"_id":"seed-S017","text":"Which fields and values are entered to configure a 0/0/1 reordering rule for a product?"}
+{"_id":"seed-S018","text":"How is a percentage down-payment invoice created from a confirmed sales order and then deducted from the final invoice?"}
+{"_id":"seed-S019","text":"How do you configure an Email Marketing A/B test, allocate recipients, and select or send the winning version?"}
+{"_id":"seed-S020","text":"What navigation path and first action start a new maintenance request in Odoo Maintenance?"}
+{"_id":"seed-S021","text":"How do you create a Studio webhook, obtain its URL, configure its trigger, and test that it receives a payload?"}
+{"_id":"seed-S022","text":"How do you manually match an unreconciled bank transaction to an existing vendor bill, from opening Bank Matching through selecting the journal item?"}
+{"_id":"seed-S023","text":"What happens immediately after a recipient clicks the Unsubscribe link in an Odoo marketing email?"}
+{"_id":"seed-S024","text":"What happens to stock in a user's default warehouse when a Field Service task containing used materials is marked done?"}
+{"_id":"seed-S025","text":"What record is created in inventory history when an applied physical count differs from the On Hand quantity?"}
+{"_id":"seed-S026","text":"What happens to a product's physical-inventory status and location when it is scrapped in Odoo?"}
+{"_id":"seed-S027","text":"What happens to a sales order after confirmation when Lock Confirmed Sales is enabled?"}
+{"_id":"seed-S028","text":"Under Singapore law, how many years must accounting records be retained before a user may permanently delete them from Odoo 19?"}
+{"_id":"seed-S029","text":"If business_management is still unavailable for a permanent WhatsApp token after the documented app-type and account-role checks, what final remediation does the Odoo 19 applications guide prescribe?"}
+{"_id":"seed-S030","text":"Why does an automatic reordering rule not create a purchase or manufacturing order while forecasted stock remains above its minimum?"}
+{"_id":"seed-S031","text":"Why is a product configured for invoicing on delivered quantities not invoiceable immediately after the sales order is confirmed?"}
+{"_id":"seed-S032","text":"Why does Odoo show an Invalid Operation pop-up when a purchase order is selected while creating a vendor bill?"}
+{"_id":"seed-S033","text":"Why did scheduled action ID 37 fail at 02:14 in my production Odoo database last night?"}
+{"_id":"seed-S034","text":"Which journal entry caused invoice INV/2026/0042 to remain unpaid in my Odoo database?"}
+{"_id":"seed-S035","text":"How must a service product be configured to invoice project time from timesheets, and how do those timesheets appear as both revenue and cost in Project profitability?"}
+{"_id":"seed-S036","text":"How is a Field Service task created from a Helpdesk ticket, and which Field Service setting lets products used on that task be added to the invoice?"}
+{"_id":"seed-S037","text":"How is an employee expense linked and processed so it is charged to a customer, and under what line does the reinvoiced amount appear in Project profitability?"}
+{"_id":"seed-S038","text":"How do you create and process a vendor bill from a purchase order, then match its bank transaction to that bill in Accounting?"}
+{"_id":"seed-S039","text":"Which Purchase document is automatically generated when a sales order is created for a dropship product?"}
+{"_id":"seed-S040","text":"Which Python controller method receives a Studio webhook before its payload reaches the Odoo ORM?"}
+{"_id":"seed-S041","text":"How do the On ordered quantities and On received quantities purchase control policies differ in when a vendor bill is created and which quantities it contains?"}
+{"_id":"seed-S042","text":"How do automatic and manual reordering-rule triggers differ in what launches replenishment and where the user acts?"}
+{"_id":"seed-S043","text":"What is the difference between unsubscribing from one mailing list and blacklisting an address from marketing emails?"}
+{"_id":"seed-S044","text":"How do corrective and preventive maintenance requests differ in Odoo Maintenance?"}
+{"_id":"seed-S045","text":"What measured transactions-per-second advantage does Odoo 19 bank reconciliation have over SAP S/4HANA 2025?"}
+{"_id":"seed-S046","text":"Can the Days unit be used as the billing period for an Odoo 19 subscription, and what workflow is daily recurrence reserved for?"}
+{"_id":"seed-S047","text":"Which product-category costing methods make an Odoo 19 purchase eligible for landed costs on its vendor bill?"}
+{"_id":"seed-S048","text":"According to the Odoo 18 documentation, which settings enable work-order dependencies and where are they located?"}
+{"_id":"seed-S049","text":"In Odoo 17, was the daily recurrence period available for ordinary subscription products?"}
+{"_id":"seed-S050","text":"Which fiscal localization should I install to file my company's taxes?"}

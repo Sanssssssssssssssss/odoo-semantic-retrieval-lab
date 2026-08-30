@@ -7,6 +7,7 @@ import pytest
 from docutils import nodes
 
 from osrlab.contract import validate_record
+from osrlab.benchmark import validate_topic_briefs
 from osrlab.chunking import _c1_scoring_windows, _c3, _chunk_configs, _make_chunk, _model_spec, _tokenizer, _windows, verify_evidence_snapshot
 from osrlab.extraction import EvidenceCollector, _normalize_rendered
 from osrlab.jsonio import write_json, write_jsonl
@@ -204,3 +205,9 @@ def test_c3_backfills_short_parent_tail_when_hard_limit_allows() -> None:
         ],
     )
     assert len(separated) == 2
+
+
+def test_seed50_topic_briefs_match_preregistered_distribution() -> None:
+    summary = validate_topic_briefs()
+    assert summary["topics"] == 50
+    assert summary["smoke_topics"] == 12

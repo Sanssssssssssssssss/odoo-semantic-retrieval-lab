@@ -125,10 +125,89 @@
         "component_chunk_ids": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "Query": {"type": "object", "required": ["id", "text", "intent", "answerability", "status"]},
-    "Nugget": {"type": "object", "required": ["id", "query_id", "text", "required", "source_span_ids"]},
-    "Judgment": {"type": "object", "required": ["query_id", "source_span_id", "grade", "status"]},
-    "HardNegative": {"type": "object", "required": ["query_id", "source_span_id", "grade", "provenance"]},
+    "Query": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "text", "intent", "answerability", "no_answer_reason", "evidence_topology", "source_fact_group", "smoke", "smoke_slice", "annotation_version", "status"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "text": {"type": "string", "minLength": 1},
+        "intent": {"enum": ["exact_identifier", "prerequisite", "ordered_procedure", "action_semantics", "diagnosis", "cross_module", "comparison", "version_applicability"]},
+        "answerability": {"enum": ["answerable", "no_answer"]},
+        "no_answer_reason": {"enum": [null, "absent_from_corpus", "requires_live_instance", "wrong_version", "enterprise_or_excluded", "ambiguous_requires_clarification", "out_of_scope"]},
+        "evidence_topology": {"enum": [null, "single_span", "same_page_multi_span", "cross_page"]},
+        "source_fact_group": {"type": "string", "minLength": 1},
+        "smoke": {"type": "boolean"}, "smoke_slice": {"enum": [null, "lexical", "semantic", "multi_evidence", "no_answer"]},
+        "annotation_version": {"type": "integer", "minimum": 1}, "status": {"enum": ["provisional", "frozen"]}
+      }
+    },
+    "Nugget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "query_id", "text", "required", "source_span_ids", "status"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "query_id": {"type": "string"},
+        "text": {"type": "string", "minLength": 1}, "required": {"type": "boolean"},
+        "source_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "status": {"enum": ["provisional", "frozen"]}
+      }
+    },
+    "Judgment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "query_id", "source_span_id", "nugget_ids", "grade", "rationale", "status"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "query_id": {"type": "string"},
+        "source_span_id": {"type": "string"}, "nugget_ids": {"type": "array", "items": {"type": "string"}},
+        "grade": {"type": "integer", "minimum": 0, "maximum": 3}, "rationale": {"type": "string"},
+        "status": {"enum": ["provisional", "frozen"]}
+      }
+    },
+    "AnnotationNugget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["local_id", "text", "required", "source_span_ids"],
+      "properties": {
+        "local_id": {"type": "string"}, "text": {"type": "string", "minLength": 1},
+        "required": {"type": "boolean"}, "source_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "AnnotationJudgment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_span_id", "grade", "local_nugget_ids", "rationale"],
+      "properties": {
+        "source_span_id": {"type": "string"}, "grade": {"type": "integer", "minimum": 0, "maximum": 3},
+        "local_nugget_ids": {"type": "array", "items": {"type": "string"}}, "rationale": {"type": "string"}
+      }
+    },
+    "AnnotationSubmission": {
+      "type": "object", "additionalProperties": false,
+      "required": ["brief_id", "annotator_id", "query_text", "intent", "answerability", "no_answer_reason", "evidence_topology", "source_fact_group", "nuggets", "judgments", "notes"],
+      "properties": {
+        "brief_id": {"type": "string"}, "annotator_id": {"type": "string"}, "query_text": {"type": "string", "minLength": 1},
+        "intent": {"$ref": "#/$defs/Query/properties/intent"}, "answerability": {"$ref": "#/$defs/Query/properties/answerability"},
+        "no_answer_reason": {"$ref": "#/$defs/Query/properties/no_answer_reason"}, "evidence_topology": {"$ref": "#/$defs/Query/properties/evidence_topology"},
+        "source_fact_group": {"type": "string", "minLength": 1},
+        "nuggets": {"type": "array", "items": {"$ref": "#/$defs/AnnotationNugget"}},
+        "judgments": {"type": "array", "items": {"$ref": "#/$defs/AnnotationJudgment"}}, "notes": {"type": "string"}
+      }
+    },
+    "TopicBrief": {
+      "type": "object", "additionalProperties": false,
+      "required": ["brief_id", "query_text", "intent", "answerability", "no_answer_reason", "evidence_topology", "source_hint_paths", "rationale", "smoke", "smoke_slice"],
+      "properties": {
+        "brief_id": {"type": "string", "pattern": "^S[0-9]{3}$"}, "query_text": {"type": "string", "minLength": 1},
+        "intent": {"$ref": "#/$defs/Query/properties/intent"}, "answerability": {"$ref": "#/$defs/Query/properties/answerability"},
+        "no_answer_reason": {"$ref": "#/$defs/Query/properties/no_answer_reason"}, "evidence_topology": {"$ref": "#/$defs/Query/properties/evidence_topology"},
+        "source_hint_paths": {"type": "array", "items": {"type": "string"}}, "rationale": {"type": "string", "minLength": 1},
+        "smoke": {"type": "boolean"}, "smoke_slice": {"$ref": "#/$defs/Query/properties/smoke_slice"}
+      }
+    },
+    "HardNegative": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "query_id", "source_span_id", "grade", "provenance", "status"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "query_id": {"type": "string"},
+        "source_span_id": {"type": "string"}, "grade": {"type": "integer", "minimum": 0, "maximum": 1},
+        "provenance": {"enum": ["seeded_agent_candidate", "sibling_section", "lexical_collision", "semantic_nearest", "wrong_module", "wrong_version", "procedure_step_confusion", "baseline_false_positive"]},
+        "status": {"enum": ["provisional", "frozen"]}
+      }
+    },
     "EvidenceCard": {"type": "object", "required": ["query_id", "rank", "chunk_id", "source_uri", "excerpt", "token_count"]},
     "RunManifest": {"type": "object", "required": ["id", "system", "corpus_hash", "benchmark_hash", "config_hash"]},
     "StageTiming": {"type": "object", "required": ["run_id", "query_id", "stage", "duration_ns"]},
