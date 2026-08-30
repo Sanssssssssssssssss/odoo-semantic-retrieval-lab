@@ -7,6 +7,8 @@ import pytest
 import numpy as np
 from docutils import nodes
 
+import osrlab.cli as cli
+
 from osrlab.contract import validate_record
 from osrlab.baselines import (
     _aggregate_window_scores,
@@ -505,6 +507,35 @@ def test_performance_cold_load_includes_full_runtime_initialization() -> None:
     old_receipt = {"resource_samples": [{"monotonic_ns": 100}, {"monotonic_ns": 350}]}
     assert _runtime_initialization_ns(old_receipt) == 250
     assert _runtime_initialization_ns({"runtime_initialization_duration_ns": 400}) == 400
+
+
+def test_all_seed_runs_only_after_every_agent_approval(monkeypatch, tmp_path: Path) -> None:
+    paths = LabPaths(tmp_path)
+    approved: list[str] = []
+    monkeypatch.setattr(cli, "require_approval", lambda phase, _: approved.append(phase) or {})
+    monkeypatch.setattr(cli, "create_environment_receipt", lambda _: tmp_path / "environment.json")
+    for name in (
+        "extract_twice",
+        "chunk_twice",
+        "run_smoke",
+        "run_provisional_matrix",
+        "build_pool",
+        "run_performance",
+    ):
+        monkeypatch.setattr(cli, name, lambda _, stage=name: {"stage": stage})
+    result = cli.run_seed_pipeline(paths, {"status": "pass"})
+    assert approved == list(cli.SEED_APPROVALS)
+    assert result["status"] == "agent_provisional_complete_human_review_pending"
+    assert result["human_review_complete"] is result["seed_frozen"] is False
+    assert list(result["stages"]) == [
+        "verify",
+        "extract",
+        "chunk",
+        "smoke",
+        "baseline",
+        "pool",
+        "perf",
+    ]
 
 
 def test_depth20_annotation_package_binds_all_inputs_and_outputs() -> None:

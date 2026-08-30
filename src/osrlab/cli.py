@@ -18,6 +18,20 @@ from .verify import verify_source
 
 
 COMMANDS = ("verify", "extract", "chunk", "smoke", "baseline", "pool", "perf", "all")
+SEED_APPROVALS = (
+    "p0",
+    "p1a",
+    "p1b",
+    "p2a",
+    "p3a",
+    "p3b-matrix",
+    "p3b-pool",
+    "p3b-depth20-agent-annotations",
+    "p3b-depth30-agent-annotations",
+    "p3b-depth40-agent-annotations",
+    "p3b-depth50-agent-annotations",
+    "p4",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +43,41 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "all":
             child.add_argument("--profile", default="seed", choices=("seed",))
     return parser
+
+
+def run_seed_pipeline(paths: LabPaths, verification: dict) -> dict:
+    approvals = {phase: require_approval(phase, paths) for phase in SEED_APPROVALS}
+    human_receipt = (
+        paths.root / "benchmarks" / "seed50" / "provisional" / "human_review" / "receipt.json"
+    )
+    human_review_complete = False
+    if human_receipt.is_file():
+        human = json.loads(human_receipt.read_text(encoding="utf-8"))
+        human_review_complete = (
+            human.get("decision") == "APPROVE" and human.get("human_review_complete") is True
+        )
+    stages = {
+        "verify": {**verification, "environment_receipt": str(create_environment_receipt(paths))},
+        "extract": extract_twice(paths),
+        "chunk": chunk_twice(paths),
+        "smoke": run_smoke(paths),
+        "baseline": run_provisional_matrix(paths),
+        "pool": build_pool(paths),
+        "perf": run_performance(paths),
+    }
+    return {
+        "profile": "seed",
+        "status": (
+            "human_review_approved_final_freeze_pending"
+            if human_review_complete
+            else "agent_provisional_complete_human_review_pending"
+        ),
+        "approval_phases": list(approvals),
+        "human_review_complete": human_review_complete,
+        "seed_frozen": False,
+        "sota_claims_allowed": False,
+        "stages": stages,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -64,18 +113,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(run_performance(paths), indent=2, ensure_ascii=False))
         return 0
     if args.command == "all":
-        require_approval("p3b-pool", paths)
-        human_receipt = (
-            paths.root
-            / "benchmarks"
-            / "seed50"
-            / "provisional"
-            / "human_review"
-            / "receipt.json"
-        )
-        if not human_receipt.is_file():
-            raise RuntimeError(
-                "Seed50 remains provisional: missing human review receipt; all -Profile seed stops before Seed freeze"
-            )
-        raise RuntimeError("Seed50 freeze/final-matrix path is not enabled until human review is approved")
+        print(json.dumps(run_seed_pipeline(paths, result), indent=2, ensure_ascii=False))
+        return 0
     raise SystemExit(f"Command '{args.command}' is gated until its implementation phase is approved")
