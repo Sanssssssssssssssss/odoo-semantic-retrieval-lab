@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .benchmark import SNAPSHOT_ID, load_jsonl
+from .benchmark import SNAPSHOT_ID, derive_retrieval_grade, load_jsonl
 from .contract import validate_record
 from .gates import require_approval
 from .jsonio import canonical_json, sha256_file, stable_id, write_json, write_jsonl
@@ -235,6 +235,7 @@ def _evidence_by_span(paths: LabPaths) -> dict[str, dict[str, Any]]:
 def _build_packet(
     selected: list[tuple[str, dict[str, Any]]],
     queries: dict[str, dict[str, Any]],
+    nuggets_by_query: dict[str, list[dict[str, str]]],
     evidence_by_span: dict[str, dict[str, Any]],
     packet_id: str,
 ) -> list[dict[str, Any]]:
@@ -250,6 +251,8 @@ def _build_packet(
             "packet_id": packet_id,
             "query_id": query["id"],
             "query_text": query["text"],
+            "answerability": query["answerability"],
+            "required_nuggets": nuggets_by_query.get(query["id"], []),
             "source_span_ids": row["source_span_ids"],
             "evidence": [evidence_by_span[span_id] for span_id in row["source_span_ids"]],
             "alias_count": len(row["pool_item_ids"]),
@@ -273,6 +276,9 @@ def _submission_templates(
             "canonical_item_id": item["id"],
             "annotator_id": annotator_id,
             "status": "PENDING",
+            "answerability": None,
+            "topic_relevance": None,
+            "required_nugget_hits": [],
             "retrieval_grade": None,
             "selected_source_span_ids": [],
             "topic_issue": None,
@@ -337,11 +343,20 @@ def run_v0_bootstrap(paths: LabPaths | None = None) -> dict[str, Any]:
     config_path = paths.root / CONFIG_RELATIVE
     queue_path = paths.root / SEED_REVIEW_RELATIVE
     query_path = paths.root / "benchmarks" / "seed50" / "provisional" / "queries.jsonl"
+    nugget_path = paths.root / "benchmarks" / "seed50" / "provisional" / "nuggets.jsonl"
     evidence_path = (
         paths.root / "corpus" / "derived" / SNAPSHOT_ID / "evidence" / "evidence_units.jsonl"
     )
     canonical_rows, raw_count = canonicalize_review_queue(_iter_jsonl(queue_path))
     queries = {row["id"]: row for row in load_jsonl(query_path)}
+    nuggets_by_query: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for nugget in load_jsonl(nugget_path):
+        if nugget["required"]:
+            nuggets_by_query[nugget["query_id"]].append(
+                {"id": nugget["id"], "text": nugget["text"]}
+            )
+    for rows in nuggets_by_query.values():
+        rows.sort(key=lambda row: row["id"])
     selected = select_calibration_items(canonical_rows, queries, config)
     dev_slots, hidden_slots = build_topic_slots(config)
     implementation_paths = [
@@ -364,6 +379,7 @@ def run_v0_bootstrap(paths: LabPaths | None = None) -> dict[str, Any]:
         str(CONFIG_RELATIVE).replace("\\", "/"): sha256_file(config_path),
         str(SEED_REVIEW_RELATIVE).replace("\\", "/"): sha256_file(queue_path),
         "benchmarks/seed50/provisional/queries.jsonl": sha256_file(query_path),
+        "benchmarks/seed50/provisional/nuggets.jsonl": sha256_file(nugget_path),
         f"corpus/derived/{SNAPSHOT_ID}/evidence/evidence_units.jsonl": sha256_file(evidence_path),
     }
     content_binding_sha256 = stable_id(
@@ -391,6 +407,7 @@ def run_v0_bootstrap(paths: LabPaths | None = None) -> dict[str, Any]:
     packet = _build_packet(
         selected,
         queries,
+        nuggets_by_query,
         _evidence_by_span(paths),
         packet_id,
     )
@@ -494,6 +511,39 @@ def run_v0_bootstrap(paths: LabPaths | None = None) -> dict[str, Any]:
     return {"root": str(artifact_root), "manifest": manifest}
 
 
+def _validate_review_semantics(item: dict[str, Any], submission: dict[str, Any]) -> int | None:
+    if not set(submission["selected_source_span_ids"]) <= set(item["source_span_ids"]):
+        raise RuntimeError(f"Submission selects a SourceSpan outside the item: {item['id']}")
+    if submission["topic_issue"] is not None:
+        if (
+            submission["answerability"] is not None
+            or submission["topic_relevance"] is not None
+            or submission["required_nugget_hits"]
+            or submission["retrieval_grade"] is not None
+            or submission["selected_source_span_ids"]
+        ):
+            raise RuntimeError(f"Topic issues must not be mixed with a relevance label: {item['id']}")
+        return None
+    if submission["answerability"] != item["answerability"]:
+        raise RuntimeError(f"Submission answerability differs from the frozen topic contract: {item['id']}")
+    if submission["topic_relevance"] is None:
+        raise RuntimeError(f"Completed submission lacks topic relevance: {item['id']}")
+    required_ids = {nugget["id"] for nugget in item["required_nuggets"]}
+    grade = derive_retrieval_grade(
+        topic_relevance=submission["topic_relevance"],
+        required_nugget_hits=submission["required_nugget_hits"],
+        required_nugget_ids=required_ids,
+    )
+    if submission["retrieval_grade"] != grade:
+        raise RuntimeError(f"Stored grade does not match the derived grade: {item['id']}")
+    selected = submission["selected_source_span_ids"]
+    if grade == 0 and selected:
+        raise RuntimeError(f"Grade 0 must not bind a SourceSpan: {item['id']}")
+    if grade >= 1 and not selected:
+        raise RuntimeError(f"Topical evidence must bind a SourceSpan: {item['id']}")
+    return grade
+
+
 def validate_calibration_submission(
     submission_path: Path,
     annotator_id: str,
@@ -528,18 +578,10 @@ def validate_calibration_submission(
             raise RuntimeError(f"Submission is pending or bound to the wrong packet: {item_id}")
         if not submission["rationale"].strip():
             raise RuntimeError(f"Submission rationale is required: {item_id}")
-        if not set(submission["selected_source_span_ids"]) <= set(item["source_span_ids"]):
-            raise RuntimeError(f"Submission selects a SourceSpan outside the item: {item_id}")
-        grade = submission["retrieval_grade"]
-        if submission["topic_issue"] is not None:
-            if grade is not None:
-                raise RuntimeError(f"Topic issues must not be mixed with a relevance grade: {item_id}")
+        grade = _validate_review_semantics(item, submission)
+        if grade is None:
             topic_issues += 1
             continue
-        if grade is None:
-            raise RuntimeError(f"Completed submission lacks a relevance grade: {item_id}")
-        if grade >= 2 and not submission["selected_source_span_ids"]:
-            raise RuntimeError(f"Positive judgment lacks SourceSpan evidence: {item_id}")
         grade_counts[grade] += 1
     return {
         "phase": "v0-tooling-calibration",
@@ -568,7 +610,9 @@ def prepare_calibration_adjudication(
 
     def label(row: dict[str, Any]) -> tuple[Any, ...]:
         return (
-            row["retrieval_grade"],
+            row["answerability"],
+            row["topic_relevance"],
+            tuple(row["required_nugget_hits"]),
             tuple(row["selected_source_span_ids"]),
             row["topic_issue"],
         )
@@ -649,7 +693,13 @@ def validate_calibration_adjudication(
     b_rows = {row["canonical_item_id"]: row for row in load_jsonl(annotator_b_path)}
 
     def label(row: dict[str, Any]) -> tuple[Any, ...]:
-        return row["retrieval_grade"], tuple(row["selected_source_span_ids"]), row["topic_issue"]
+        return (
+            row["answerability"],
+            row["topic_relevance"],
+            tuple(row["required_nugget_hits"]),
+            tuple(row["selected_source_span_ids"]),
+            row["topic_issue"],
+        )
 
     disagreements = sorted(item_id for item_id in a_rows if label(a_rows[item_id]) != label(b_rows[item_id]))
     expected_id = stable_id(
@@ -686,16 +736,7 @@ def validate_calibration_adjudication(
             raise RuntimeError(f"Adjudication is pending or bound to the wrong packet: {item_id}")
         if not submission["rationale"].strip():
             raise RuntimeError(f"Adjudication rationale is required: {item_id}")
-        if not set(submission["selected_source_span_ids"]) <= set(item["source_span_ids"]):
-            raise RuntimeError(f"Adjudication selects a SourceSpan outside the item: {item_id}")
-        grade = submission["retrieval_grade"]
-        if submission["topic_issue"] is not None:
-            if grade is not None:
-                raise RuntimeError(f"Topic issues must not be mixed with a relevance grade: {item_id}")
-        elif grade is None:
-            raise RuntimeError(f"Completed adjudication lacks a relevance grade: {item_id}")
-        elif grade >= 2 and not submission["selected_source_span_ids"]:
-            raise RuntimeError(f"Positive adjudication lacks SourceSpan evidence: {item_id}")
+        _validate_review_semantics(item, submission)
     return {
         "phase": "v0-tooling-calibration-adjudication",
         "adjudication_manifest_id": manifest["id"],

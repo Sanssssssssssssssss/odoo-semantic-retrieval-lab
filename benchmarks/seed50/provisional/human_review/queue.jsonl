@@ -9,6 +9,7 @@
 {"brief_id":"S019","id":"S019","query_id":"seed-S019","reasons":["agent_disagreement"],"status":"pending_human_review"}
 {"brief_id":"S021","id":"S021","query_id":"seed-S021","reasons":["agent_disagreement"],"status":"pending_human_review"}
 {"brief_id":"S022","id":"S022","query_id":"seed-S022","reasons":["agent_disagreement"],"status":"pending_human_review"}
+{"brief_id":"S026","id":"S026","query_id":"seed-S026","reasons":["topic_contract_correction"],"status":"pending_human_review"}
 {"brief_id":"S028","id":"S028","query_id":"seed-S028","reasons":["no_answer"],"status":"pending_human_review"}
 {"brief_id":"S030","id":"S030","query_id":"seed-S030","reasons":["agent_disagreement"],"status":"pending_human_review"}
 {"brief_id":"S033","id":"S033","query_id":"seed-S033","reasons":["no_answer"],"status":"pending_human_review"}

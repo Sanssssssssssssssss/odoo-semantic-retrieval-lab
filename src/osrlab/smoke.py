@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 import time
 from collections import defaultdict
@@ -14,7 +13,7 @@ import ir_measures
 import numpy as np
 import psutil
 
-from .benchmark import SNAPSHOT_ID, load_jsonl
+from .benchmark import SNAPSHOT_ID, derive_retrieval_grade, load_jsonl
 from .contract import validate_record
 from .gates import require_approval
 from .jsonio import canonical_json, sha256_file, stable_id, write_json, write_jsonl
@@ -25,7 +24,7 @@ from .verify import verify_source
 T = TypeVar("T")
 RUN_TAG = "E0-C2-seed-smoke"
 EXPECTED_C2_MANIFEST_SHA256 = "e13c1a7a86cd471eaa2bba38b4bfac26b366aea68e1ee3151330d220b7c52f4e"
-EXPECTED_SEED50_MANIFEST_SHA256 = "4e6dd6790e3a464939a441fe8252b4704c1cc5b678b2ea66ba1f462f147e8183"
+EXPECTED_SEED50_MANIFEST_SHA256 = "3f437a70ed02bd6fcaac414988624e7279181fdd29db64ab5261460fc3de8f24"
 E0_CONFIG = {
     "system": "E0-BM25",
     "implementation": "bm25s",
@@ -286,7 +285,18 @@ def evaluate_ranking(
         "judged_at_10": ir_measures.Judged @ 10,
         "bpref": ir_measures.BPref(rel=2),
     }
-    calculated = ir_measures.calc_aggregate(measures.values(), qrels, run)
+    # ir_measures owns tie handling once scores are passed in. Replace tied retrieval
+    # scores with the contract's explicit score-descending, chunk-ID order first.
+    ordered_run = {
+        query_id: {
+            chunk_id: float(len(documents) - rank)
+            for rank, chunk_id in enumerate(
+                sorted(documents, key=lambda value: (-documents[value], value))
+            )
+        }
+        for query_id, documents in run.items()
+    }
+    calculated = ir_measures.calc_aggregate(measures.values(), qrels, ordered_run)
     return {name: float(calculated[measure]) for name, measure in measures.items()}
 
 
@@ -320,20 +330,36 @@ def _source_document_ndcg(
     rankings: dict[str, list[dict[str, Any]]],
     chunks: dict[str, dict[str, Any]],
     judgments: list[dict[str, Any]],
+    nuggets: list[dict[str, Any]],
     span_to_document: dict[str, str],
 ) -> float:
-    qrels: dict[str, dict[str, int]] = defaultdict(dict)
+    required: dict[str, set[str]] = defaultdict(set)
+    for nugget in nuggets:
+        if nugget["required"]:
+            required[nugget["query_id"]].add(nugget["id"])
+    states: dict[tuple[str, str], dict[str, Any]] = {}
     for judgment in judgments:
         if judgment["query_id"] in answerable_ids:
             document_id = span_to_document[judgment["source_span_id"]]
-            qrels[judgment["query_id"]][document_id] = max(
-                judgment["grade"], qrels[judgment["query_id"]].get(document_id, 0)
+            state = states.setdefault(
+                (judgment["query_id"], document_id),
+                {"topic_relevance": False, "required_nugget_hits": set()},
             )
+            state["topic_relevance"] |= judgment["topic_relevance"]
+            state["required_nugget_hits"].update(judgment["required_nugget_hits"])
+    qrels: dict[str, dict[str, int]] = defaultdict(dict)
+    for (query_id, document_id), state in states.items():
+        qrels[query_id][document_id] = derive_retrieval_grade(
+            topic_relevance=state["topic_relevance"],
+            required_nugget_hits=state["required_nugget_hits"],
+            required_nugget_ids=required[query_id],
+        )
     run: dict[str, dict[str, float]] = defaultdict(dict)
     for query_id in sorted(answerable_ids):
         for result in rankings[query_id]:
             document_id = chunks[result["chunk_id"]]["source_document_id"]
-            run[query_id][document_id] = max(result["score"], run[query_id].get(document_id, -math.inf))
+            if document_id not in run[query_id]:
+                run[query_id][document_id] = -float(result["rank"])
     return float(ir_measures.calc_aggregate([ir_measures.nDCG @ 10], dict(qrels), dict(run))[ir_measures.nDCG @ 10])
 
 
@@ -347,7 +373,7 @@ def _evidence_metrics(
 ) -> dict[str, float]:
     gold_spans: dict[str, set[str]] = defaultdict(set)
     for judgment in judgments:
-        if judgment["query_id"] in answerable_ids and judgment["grade"] >= 2:
+        if judgment["query_id"] in answerable_ids and judgment["required_nugget_hits"]:
             gold_spans[judgment["query_id"]].add(judgment["source_span_id"])
     required: dict[str, list[set[str]]] = defaultdict(list)
     for nugget in nuggets:
@@ -556,7 +582,7 @@ def run_smoke(paths: LabPaths | None = None) -> dict[str, Any]:
     def calculate_metrics() -> dict[str, Any]:
         fixed_chunk = evaluate_ranking(smoke_qrels, smoke_run)
         fixed_chunk["source_document_ndcg_at_10"] = _source_document_ndcg(
-            answerable_ids, rankings, chunks, judgments, span_to_document
+            answerable_ids, rankings, chunks, judgments, nuggets, span_to_document
         )
         fixed_chunk.update(
             _evidence_metrics(

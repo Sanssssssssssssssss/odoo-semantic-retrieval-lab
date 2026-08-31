@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import platform
+import re
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -11,13 +12,14 @@ from typing import Any
 import bm25s
 import numpy as np
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModel, AutoModelForSequenceClassification, AutoTokenizer
 
 from .baselines import (
     BGE_KEY,
     QUERY_INSTRUCTION,
     RERANKER_KEY,
     _aggregate_window_scores,
+    _encode_bge,
     _hybrid,
     _rank_all,
     _read_approved_trec_run,
@@ -33,13 +35,19 @@ from .smoke import (
     _evidence_metrics,
     _read_qrels,
     _source_document_ndcg,
+    _rank,
     assemble_evidence_cards,
     evaluate_ranking,
 )
 
 
 CONFIG_PATH = "configs/retrieval-tuning-v1.json"
+RECALL_CONFIG_PATH = "configs/retrieval-recall-v2.json"
 MATRIX_PATH = "artifacts/matrices/seed50-provisional/manifest.json"
+
+
+def _configured_chunk_ids(config: dict[str, Any]) -> list[str]:
+    return config["chunk_configs"] if "chunk_configs" in config else [config["chunk_config"]]
 
 
 def _percentiles_ns(values: list[int]) -> dict[str, float]:
@@ -217,12 +225,14 @@ def _body_text(chunk: dict[str, Any], units: dict[str, dict[str, Any]]) -> str:
     return "\n".join(pieces)
 
 
-def _load_inputs(paths: LabPaths) -> dict[str, Any]:
-    config_path = paths.root / CONFIG_PATH
+def _load_inputs(
+    paths: LabPaths, *, config_relative: str = CONFIG_PATH, chunk_config: str | None = None
+) -> dict[str, Any]:
+    config_path = paths.root / config_relative
     matrix_path = paths.root / MATRIX_PATH
     config = json.loads(config_path.read_text(encoding="utf-8"))
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
-    chunk_config = config["chunk_config"]
+    chunk_config = chunk_config or config["chunk_config"]
     run_entries = {
         entry["system"]: entry
         for entry in matrix["runs"]
@@ -254,20 +264,194 @@ def _load_inputs(paths: LabPaths) -> dict[str, Any]:
         "qrels": _read_qrels(benchmark_root / "derived" / chunk_config / "qrels.seed.trec"),
         "judgments": load_jsonl(benchmark_root / "judgments.jsonl"),
         "nuggets": load_jsonl(benchmark_root / "nuggets.jsonl"),
-        "hard_negatives": load_jsonl(
-            paths.root
-            / "benchmarks"
-            / "seed50"
-            / "pooling"
-            / "provisional"
-            / "adjudicated"
-            / "hard_negatives.jsonl"
-        ),
+        "hard_negatives": load_jsonl(benchmark_root / "hard_negatives.jsonl"),
         "chunks": chunks,
         "units": {
             unit["id"]: unit for unit in load_jsonl(evidence_root / "evidence_units.jsonl")
         },
         "spans": load_jsonl(evidence_root / "source_spans.jsonl"),
+    }
+
+
+def _context_header(chunk: dict[str, Any], units: dict[str, dict[str, Any]]) -> str:
+    page = chunk["source_uri"].split("/documentation/19.0/", 1)[-1].split("#", 1)[0]
+    parts = page.removesuffix(".html").split("/")
+    module = "/".join(parts[1:3]) if parts and parts[0] == "applications" else "/".join(parts[:2])
+    node_types: list[str] = []
+    for fragment in chunk["span_fragments"]:
+        node_type = units[fragment["evidence_unit_id"]]["node_type"]
+        if node_type not in node_types:
+            node_types.append(node_type)
+    return f"Odoo 19 | module={module} | page={page} | types={','.join(node_types)}"
+
+
+def _contextual_windows(
+    chunks: list[dict[str, Any]],
+    units: dict[str, dict[str, Any]],
+    unit_token_counts: dict[str, int],
+    tokenizer: Any,
+) -> tuple[list[str], list[str], np.ndarray]:
+    lexical, dense, window_chunk_indices = _window_texts(
+        chunks, units, unit_token_counts, tokenizer
+    )
+    headers = [_context_header(chunks[index], units) for index in window_chunk_indices]
+    return (
+        [f"{header}\n{text}" for header, text in zip(headers, lexical)],
+        [f"{header}\n{text}" for header, text in zip(headers, dense)],
+        window_chunk_indices,
+    )
+
+
+def _atomic_subqueries(text: str, max_queries: int = 4) -> list[str]:
+    """Surface-only diagnostic decomposition; the original query is always first."""
+    normalized = " ".join(text.split())
+    clauses = [
+        part.strip(" ,;?.")
+        for part in re.split(r"\s*(?:;|,\s*(?:and\s+|then\s+)?|\bthen\b)\s*", normalized, flags=re.I)
+        if len(part.strip(" ,;?.").split()) >= 2
+    ]
+    if len(clauses) < 2:
+        return [normalized]
+    anchor = clauses[0]
+    candidates = [normalized, anchor, *(f"{anchor} {clause}" for clause in clauses[1:])]
+    output: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.casefold()
+        if key not in seen:
+            output.append(candidate)
+            seen.add(key)
+        if len(output) == max_queries:
+            break
+    return output
+
+
+def _weighted_rrf_many(
+    query_id: str, rankings: list[list[dict[str, Any]]], *, k: int = 60, depth: int = 100
+) -> list[dict[str, Any]]:
+    if not rankings:
+        raise ValueError("At least one ranking is required")
+    weights = [1.0] if len(rankings) == 1 else [1.0, *([1.0 / (len(rankings) - 1)] * (len(rankings) - 1))]
+    scores: dict[str, float] = defaultdict(float)
+    for weight, ranking in zip(weights, rankings):
+        for row in ranking[:depth]:
+            scores[row["chunk_id"]] += weight / (k + row["rank"])
+    ordered = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))[:depth]
+    return [
+        {"query_id": query_id, "rank": rank, "chunk_id": chunk_id, "score": scores[chunk_id]}
+        for rank, chunk_id in enumerate(ordered, 1)
+    ]
+
+
+def _contextual_retrieve(
+    query_id: str,
+    text: str,
+    chunks: list[dict[str, Any]],
+    sparse_model: Any,
+    embeddings: np.ndarray,
+    window_chunk_indices: np.ndarray,
+    model: Any,
+    tokenizer: Any,
+    *,
+    decompose: bool,
+    max_queries: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
+    timings: dict[str, int] = {}
+    started = time.perf_counter_ns()
+    surface_queries = _atomic_subqueries(text, max_queries) if decompose else [text]
+    timings["query_decomposition"] = time.perf_counter_ns() - started
+
+    started = time.perf_counter_ns()
+    query_tokens = bm25s.tokenize(
+        surface_queries,
+        lower=True,
+        stopwords="english",
+        stemmer=None,
+        return_ids=False,
+        show_progress=False,
+    )
+    sparse_window_scores = [sparse_model.get_scores(tokens) for tokens in query_tokens]
+    timings["sparse"] = time.perf_counter_ns() - started
+
+    started = time.perf_counter_ns()
+    query_embeddings = _encode_bge(
+        model,
+        tokenizer,
+        [QUERY_INSTRUCTION + query for query in surface_queries],
+        batch_size=max_queries,
+    )
+    timings["dense_encode"] = time.perf_counter_ns() - started
+
+    chunk_ids = [chunk["id"] for chunk in chunks]
+    sparse_rankings: list[list[dict[str, Any]]] = []
+    dense_rankings: list[list[dict[str, Any]]] = []
+    started = time.perf_counter_ns()
+    for index in range(len(surface_queries)):
+        sparse_scores = _aggregate_window_scores(
+            sparse_window_scores[index], window_chunk_indices, len(chunks)
+        )
+        dense_scores = _aggregate_window_scores(
+            embeddings @ query_embeddings[index], window_chunk_indices, len(chunks)
+        )
+        sparse_indices = np.asarray(_rank(sparse_scores, chunk_ids, 100), dtype=np.int32)
+        dense_indices = np.asarray(_rank(dense_scores, chunk_ids, 100), dtype=np.int32)
+        owner = f"{query_id}::{index}"
+        sparse_rankings.append(_ranking_from_scores(owner, chunk_ids, sparse_scores, sparse_indices))
+        dense_rankings.append(_ranking_from_scores(owner, chunk_ids, dense_scores, dense_indices))
+    timings["exact_search"] = time.perf_counter_ns() - started
+
+    started = time.perf_counter_ns()
+    hybrids = [
+        _rrf({rows[0]["query_id"]: rows}, {dense_rows[0]["query_id"]: dense_rows}, k=60)[
+            rows[0]["query_id"]
+        ]
+        for rows, dense_rows in zip(sparse_rankings, dense_rankings)
+    ]
+    ranking = _weighted_rrf_many(query_id, hybrids, k=60)
+    timings["fusion"] = time.perf_counter_ns() - started
+    return ranking, sparse_rankings[0], dense_rankings[0], timings
+
+
+def _recall_latency(
+    data: dict[str, Any],
+    sparse_model: Any,
+    embeddings: np.ndarray,
+    window_chunk_indices: np.ndarray,
+    model: Any,
+    tokenizer: Any,
+    *,
+    decompose: bool,
+) -> dict[str, Any]:
+    config = data["config"]["latency"]
+    queries = data["queries"]
+    max_queries = data["config"]["query_decomposition"]["max_queries"]
+    for index in range(config["warmup_requests"]):
+        query = queries[index % len(queries)]
+        _contextual_retrieve(
+            query["id"], query["text"], data["chunks"], sparse_model, embeddings,
+            window_chunk_indices, model, tokenizer, decompose=decompose, max_queries=max_queries
+        )
+    values: dict[str, list[int]] = defaultdict(list)
+    started = time.perf_counter_ns()
+    requests = 0
+    while requests < config["minimum_requests"] or time.perf_counter_ns() - started < config["minimum_seconds"] * 1_000_000_000:
+        query = queries[requests % len(queries)]
+        request_started = time.perf_counter_ns()
+        _, _, _, timings = _contextual_retrieve(
+            query["id"], query["text"], data["chunks"], sparse_model, embeddings,
+            window_chunk_indices, model, tokenizer, decompose=decompose, max_queries=max_queries
+        )
+        timings["service_total"] = time.perf_counter_ns() - request_started
+        for stage, elapsed in timings.items():
+            values[stage].append(elapsed)
+        requests += 1
+    duration = time.perf_counter_ns() - started
+    return {
+        "scope": "exploratory_cpu_single_thread_warm_only",
+        "requests": requests,
+        "duration_seconds": duration / 1_000_000_000,
+        "qps": requests * 1_000_000_000 / duration,
+        "stages": {stage: _percentiles_ns(samples) for stage, samples in sorted(values.items())},
     }
 
 
@@ -439,6 +623,7 @@ def _evaluate(
         rankings,
         chunk_by_id,
         data["judgments"],
+        data["nuggets"],
         {span["id"]: span["source_document_id"] for span in data["spans"]},
     )
     return {
@@ -529,12 +714,25 @@ def _oof_select(
 def _expanded_chunks(
     rankings: dict[str, list[dict[str, Any]]],
     chunks: list[dict[str, Any]],
+    units: dict[str, dict[str, Any]],
     mode: str,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     if mode == "leaf":
         return rankings, {chunk["id"]: chunk for chunk in chunks}
     by_id = {chunk["id"]: chunk for chunk in chunks}
-    order = {chunk["id"]: index for index, chunk in enumerate(chunks)}
+    def source_key(chunk: dict[str, Any]) -> tuple[Any, ...]:
+        ordinal, token_start, char_start = min(
+            (
+                units[fragment["evidence_unit_id"]]["ordinal"],
+                fragment["unit_token_start"],
+                fragment["unit_char_start"],
+            )
+            for fragment in chunk["span_fragments"]
+        )
+        return chunk["source_document_id"], ordinal, token_start, char_start, chunk["id"]
+
+    ordered = sorted(chunks, key=source_key)
+    order = {chunk["id"]: index for index, chunk in enumerate(ordered)}
     by_section: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     by_parent: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for chunk in chunks:
@@ -555,7 +753,7 @@ def _expanded_chunks(
             if mode in ("neighbor", "parent_neighbor") and leaf["parent_section_ids"]:
                 siblings = sorted(
                     by_parent[(leaf["source_document_id"], leaf["parent_section_ids"][0])],
-                    key=lambda chunk: (order[chunk["id"]], chunk["id"]),
+                    key=source_key,
                 )
                 position = next((i for i, chunk in enumerate(siblings) if chunk["id"] == leaf["id"]), None)
                 if position is not None:
@@ -563,7 +761,10 @@ def _expanded_chunks(
                     supplements.extend(siblings[position + 1 : position + 2])
             selected = [leaf] + sorted(
                 {chunk["id"]: chunk for chunk in supplements if chunk["id"] != leaf["id"]}.values(),
-                key=lambda chunk: (order[chunk["id"]], chunk["id"]),
+                key=lambda chunk: (
+                    abs(order[chunk["id"]] - order[leaf["id"]]),
+                    source_key(chunk),
+                ),
             )
             fragments = []
             seen = set()
@@ -595,7 +796,9 @@ def _hierarchy_evidence(
     )
     output = {}
     for mode in data["config"]["e2"]["hierarchy_modes"]:
-        expanded_rankings, expanded_chunks = _expanded_chunks(rankings, data["chunks"], mode)
+        expanded_rankings, expanded_chunks = _expanded_chunks(
+            rankings, data["chunks"], data["units"], mode
+        )
         cards = {}
         diagnostics = {}
         for query_id in sorted(answerable):
@@ -864,6 +1067,8 @@ def _write_experiment(
             "src/osrlab/diagnostics.py",
             "src/osrlab/perf_worker.py",
             "src/osrlab/smoke.py",
+            "src/osrlab/benchmark.py",
+            "src/osrlab/contract.py",
             "src/osrlab/jsonio.py",
             "src/osrlab/paths.py",
         )
@@ -874,10 +1079,32 @@ def _write_experiment(
     }
     implementation_sha256 = stable_id(canonical_json(implementation_hashes), length=64)
     result_sha256 = stable_id(canonical_json(result), length=64)
+    benchmark_root = paths.root / "benchmarks" / "seed50" / "provisional"
+    chunk_configs = _configured_chunk_ids(data["config"])
+    input_paths = {
+        "matrix.json": data["matrix_path"],
+        "benchmark/manifest.json": benchmark_root / "manifest.json",
+        "benchmark/queries.jsonl": benchmark_root / "queries.jsonl",
+        "benchmark/nuggets.jsonl": benchmark_root / "nuggets.jsonl",
+        "benchmark/judgments.jsonl": benchmark_root / "judgments.jsonl",
+        "benchmark/hard_negatives.jsonl": benchmark_root / "hard_negatives.jsonl",
+        **{
+            f"chunks/{chunk_config}/manifest.json": paths.root
+            / "corpus" / "derived" / SNAPSHOT_ID / "chunks" / chunk_config / "manifest.json"
+            for chunk_config in chunk_configs
+        },
+        **{
+            f"qrels/{chunk_config}.trec": benchmark_root
+            / "derived" / chunk_config / "qrels.seed.trec"
+            for chunk_config in chunk_configs
+        },
+    }
+    input_hashes = {name: sha256_file(path) for name, path in input_paths.items()}
+    input_sha256 = stable_id(canonical_json(input_hashes), length=64)
     run_id = stable_id(
         family,
         sha256_file(data["config_path"]),
-        sha256_file(data["matrix_path"]),
+        input_sha256,
         implementation_sha256,
         result_sha256,
         length=40,
@@ -893,6 +1120,27 @@ def _write_experiment(
         "",
         "See `results.json` for complete fixed-chunk, 2,048-token evidence, no-answer, hard-negative, and latency receipts.",
     ]
+    if family == "recall-v2":
+        report.extend(["", "## Fixed-chunker quality", "", "| Chunk | Variant | nDCG@10 | Recall@1 | Recall@3 | Recall@5 | Recall@10 |", "|---|---|---:|---:|---:|---:|---:|"])
+        for chunk_config, chunk_result in result["chunks"].items():
+            for variant, quality in chunk_result["quality"].items():
+                fixed = quality["fixed_chunk"]
+                report.append(
+                    f"| {chunk_config} | {variant} | {fixed['ndcg_at_10']:.4f} | {fixed['recall_at_1']:.4f} | {fixed['recall_at_3']:.4f} | {fixed['recall_at_5']:.4f} | {fixed['recall_at_10']:.4f} |"
+                )
+        report.extend(["", "## CPU warm latency", "", "| Chunk | Variant | p50 ms | p95 ms | p99 ms | Requests |", "|---|---|---:|---:|---:|---:|"])
+        for chunk_config, chunk_result in result["chunks"].items():
+            for variant, latency in chunk_result["latency"].items():
+                total = latency["stages"]["service_total"]
+                report.append(
+                    f"| {chunk_config} | {variant} | {total['p50_ms']:.3f} | {total['p95_ms']:.3f} | {total['p99_ms']:.3f} | {latency['requests']} |"
+                )
+        report.extend(["", "## 2,048-token hierarchy evidence", "", "| Chunk | Mode | Evidence recall | Required-nugget recall | Completeness | Irrelevant-token ratio | Duplicate rate |", "|---|---|---:|---:|---:|---:|---:|"])
+        for chunk_config, chunk_result in result["chunks"].items():
+            for mode, evidence in chunk_result["hierarchy_evidence"].items():
+                report.append(
+                    f"| {chunk_config} | {mode} | {evidence['evidence_recall_at_2048_tokens']:.4f} | {evidence['required_nugget_recall_at_2048_tokens']:.4f} | {evidence['required_nugget_completeness_at_2048_tokens']:.4f} | {evidence['irrelevant_token_ratio_at_2048_tokens']:.4f} | {evidence['duplicate_evidence_rate_at_2048_tokens']:.4f} |"
+                )
     (root / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8", newline="\n")
     output_hashes = {
         name: sha256_file(root / name) for name in ("results.json", "top10.jsonl", "report.md")
@@ -904,6 +1152,8 @@ def _write_experiment(
         "status": "provisional_seed50_candidate_screen_only",
         "config_sha256": sha256_file(data["config_path"]),
         "matrix_sha256": sha256_file(data["matrix_path"]),
+        "input_sha256": input_sha256,
+        "input_hashes": input_hashes,
         "implementation_sha256": implementation_sha256,
         "implementation_hashes": implementation_hashes,
         "result_content_sha256": result_sha256,
@@ -1232,3 +1482,152 @@ def run_e3_tuning(paths: LabPaths | None = None) -> dict[str, Any]:
         for query_id in sorted(ranking)
     ]
     return _write_experiment(paths, "e3-v1", data, result, top10)
+
+
+def run_recall_tuning(paths: LabPaths | None = None) -> dict[str, Any]:
+    paths = paths or LabPaths.discover()
+    config = json.loads((paths.root / RECALL_CONFIG_PATH).read_text(encoding="utf-8"))
+    first_data: dict[str, Any] | None = None
+    result: dict[str, Any] = {
+        "status": "provisional_seed50_candidate_screen_only",
+        "experiment_contract": "fixed-chunker ranking metrics; cross-chunker comparison limited to 2048-token evidence metrics",
+        "offline_corpus_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+        "online_query_device": "cpu-float32",
+        "chunks": {},
+        "sota_claims_allowed": False,
+    }
+    top10: list[dict[str, Any]] = []
+    for chunk_config in config["chunk_configs"]:
+        data = _load_inputs(
+            paths, config_relative=RECALL_CONFIG_PATH, chunk_config=chunk_config
+        )
+        first_data = first_data or data
+        unit_token_counts = _unit_token_counts(paths)
+        model_path = _snapshot_dir(paths, _model_spec(paths, BGE_KEY))
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path, local_files_only=True, use_fast=True
+        )
+
+        build_started = time.perf_counter_ns()
+        lexical_windows, dense_windows, window_chunk_indices = _contextual_windows(
+            data["chunks"], data["units"], unit_token_counts, tokenizer
+        )
+        sparse_tokens = bm25s.tokenize(
+            lexical_windows,
+            lower=True,
+            stopwords="english",
+            stemmer=None,
+            return_ids=False,
+            show_progress=False,
+        )
+        sparse_model = bm25s.BM25(k1=1.5, b=0.75, method="lucene")
+        sparse_model.index(sparse_tokens, show_progress=False)
+        sparse_build_ns = time.perf_counter_ns() - build_started
+
+        model = AutoModel.from_pretrained(model_path, local_files_only=True).eval().float()
+        offline_device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(offline_device)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        dense_started = time.perf_counter_ns()
+        embeddings = _encode_bge(model, tokenizer, dense_windows, batch_size=64)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        dense_build_ns = time.perf_counter_ns() - dense_started
+        model.to("cpu")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        del lexical_windows, dense_windows, sparse_tokens
+
+        m1: dict[str, list[dict[str, Any]]] = {}
+        m2: dict[str, list[dict[str, Any]]] = {}
+        contextual_sparse: dict[str, list[dict[str, Any]]] = {}
+        contextual_dense: dict[str, list[dict[str, Any]]] = {}
+        for query in data["queries"]:
+            ranking, sparse, dense, _ = _contextual_retrieve(
+                query["id"], query["text"], data["chunks"], sparse_model, embeddings,
+                window_chunk_indices, model, tokenizer, decompose=False,
+                max_queries=config["query_decomposition"]["max_queries"],
+            )
+            m1[query["id"]] = ranking
+            contextual_sparse[query["id"]] = sparse
+            contextual_dense[query["id"]] = dense
+            m2[query["id"]], _, _, _ = _contextual_retrieve(
+                query["id"], query["text"], data["chunks"], sparse_model, embeddings,
+                window_chunk_indices, model, tokenizer, decompose=True,
+                max_queries=config["query_decomposition"]["max_queries"],
+            )
+
+        baseline = _evaluate(
+            data,
+            data["rankings"]["E2-hybrid-rrf"],
+            sparse_for_answerability=data["rankings"]["E0-BM25"],
+            dense_for_answerability=data["rankings"]["E1-dense-exact"],
+        )
+        contextual = _evaluate(
+            data, m1, sparse_for_answerability=contextual_sparse,
+            dense_for_answerability=contextual_dense,
+        )
+        decomposed = _evaluate(
+            data, m2, sparse_for_answerability=contextual_sparse,
+            dense_for_answerability=contextual_dense,
+        )
+        hierarchy = _hierarchy_evidence(data, m1)
+        chunk_result = {
+            "corpus_build": {
+                "offline_device": offline_device,
+                "windows": len(window_chunk_indices),
+                "sparse_build_seconds": sparse_build_ns / 1_000_000_000,
+                "dense_build_seconds": dense_build_ns / 1_000_000_000,
+                "dense_index_bytes": int(embeddings.nbytes),
+            },
+            "quality": {
+                "M0-baseline-e2": baseline,
+                "M1-contextual-e2": contextual,
+                "M1-M2-surface-decomposition": decomposed,
+            },
+            "hierarchy_evidence": hierarchy,
+            "screening": {
+                "M1-contextual-e2": _promotion_gate(baseline, contextual, config),
+                "M1-M2-surface-decomposition": _promotion_gate(baseline, decomposed, config),
+            },
+            "latency": {
+                "M1-contextual-e2": _recall_latency(
+                    data, sparse_model, embeddings, window_chunk_indices, model, tokenizer,
+                    decompose=False,
+                ),
+                "M1-M2-surface-decomposition": _recall_latency(
+                    data, sparse_model, embeddings, window_chunk_indices, model, tokenizer,
+                    decompose=True,
+                ),
+            },
+        }
+        result["chunks"][chunk_config] = chunk_result
+        for variant, ranking in (
+            ("M0-baseline-e2", data["rankings"]["E2-hybrid-rrf"]),
+            ("M1-contextual-e2", m1),
+            ("M1-M2-surface-decomposition", m2),
+        ):
+            top10.extend(
+                {
+                    "variant": f"{chunk_config}:{variant}",
+                    "query_id": query_id,
+                    "chunk_ids": [row["chunk_id"] for row in ranking[query_id][:10]],
+                }
+                for query_id in sorted(ranking)
+            )
+        del sparse_model, embeddings, model
+
+    assert first_data is not None
+    result["cross_chunker_2048_only"] = {
+        variant: {
+            chunk_config: result["chunks"][chunk_config]["quality"][variant]["evidence_2048"]
+            for chunk_config in config["chunk_configs"]
+        }
+        for variant in (
+            "M0-baseline-e2",
+            "M1-contextual-e2",
+            "M1-M2-surface-decomposition",
+        )
+    }
+    return _write_experiment(paths, "recall-v2", first_data, result, top10)

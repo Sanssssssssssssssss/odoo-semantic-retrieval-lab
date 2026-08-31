@@ -17,7 +17,7 @@ from .performance import run_performance
 from .pooling import build_pool
 from .receipts import create_environment_receipt
 from .smoke import run_smoke
-from .tuning import run_e2_tuning, run_e3_tuning
+from .tuning import run_e2_tuning, run_e3_tuning, run_recall_tuning
 from .verify import verify_source
 from .v0 import (
     prepare_calibration_adjudication,
@@ -38,6 +38,7 @@ COMMANDS = (
     "p5",
     "tune-e2",
     "tune-e3",
+    "tune-recall",
     "v0-bootstrap",
     "v0-validate",
     "v0-adjudicate",
@@ -204,6 +205,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "tune-e3":
         print(json.dumps(run_e3_tuning(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "tune-recall":
+        print(json.dumps(run_recall_tuning(paths), indent=2, ensure_ascii=False))
         return 0
     if args.command == "v0-bootstrap":
         print(json.dumps(run_v0_bootstrap(paths), indent=2, ensure_ascii=False))

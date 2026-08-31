@@ -10,12 +10,16 @@ Seed50 is an engineering pilot, not a formal human gold set. Two agents annotate
 - Do not bind gold to a chunk ID. Chunk qrels are generated later from canonical spans.
 - Keep distinct spans when a question needs multiple facts. Do not select a broad nearby section merely because it contains the right keywords.
 
-## Four-level judgment
+## Mechanical four-level judgment
 
-- `0`: irrelevant or contradicts the requested module/version/condition.
-- `1`: topically related but does not supply answer evidence.
-- `2`: useful answer evidence that is incomplete or must be combined with other evidence.
-- `3`: direct, complete, and self-contained evidence for the associated nugget(s).
+Annotators record `topic_relevance` and the IDs of required atomic nuggets actually supported by the visible evidence. `grade` is not subjective; tooling derives it:
+
+- `0`: not topically relevant; no nugget hit and no selected span.
+- `1`: topically relevant but hits no required nugget; at least one topical span is selected.
+- `2`: hits at least one, but not all, required nuggets.
+- `3`: hits every required nugget.
+
+For no-answer topics, required nugget hits are always empty, so visible topical material can be grade 1 but never a positive qrel. A stored grade that differs from the derived grade is invalid.
 
 Unjudged candidates are not grade 0. Seeded grade 0/1 examples are useful but heterogeneous pooling will add the required hard negatives later.
 
@@ -40,4 +44,4 @@ Do not convert ambiguity into an invented assumption. No-answer labels evaluate 
 
 ## Blindness and provenance
 
-Annotators may read the topic briefs and the frozen corpus only. They must not read the other annotator's output. Each submission records its own annotator ID. The adjudicator reads both submissions, rechecks every cited source, and records a fresh decision; it must not resolve differences by blindly preferring one annotator.
+Annotators may read the topic briefs, the frozen atomic-nugget rubric, and the frozen corpus only. The rubric exposes nugget text but never canonical gold spans or system labels. They must not read the other annotator's output. Each submission records its own annotator ID. The adjudicator reads both submissions, rechecks every cited source, and records a fresh decision; it must not resolve differences by blindly preferring one annotator.

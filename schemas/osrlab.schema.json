@@ -151,10 +151,13 @@
     },
     "Judgment": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "schema_version", "query_id", "source_span_id", "nugget_ids", "grade", "rationale", "status"],
+      "required": ["id", "schema_version", "query_id", "source_span_id", "nugget_ids", "topic_relevance", "required_nugget_hits", "answerability", "grade", "rationale", "status"],
       "properties": {
         "id": {"type": "string"}, "schema_version": {"const": 1}, "query_id": {"type": "string"},
         "source_span_id": {"type": "string"}, "nugget_ids": {"type": "array", "items": {"type": "string"}},
+        "topic_relevance": {"type": "boolean"},
+        "required_nugget_hits": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "answerability": {"$ref": "#/$defs/Query/properties/answerability"},
         "grade": {"type": "integer", "minimum": 0, "maximum": 3}, "rationale": {"type": "string"},
         "status": {"enum": ["provisional", "frozen"]}
       }
@@ -234,10 +237,12 @@
     },
     "ReviewPacketItem": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "schema_version", "packet_id", "query_id", "query_text", "source_span_ids", "evidence", "alias_count", "chunk_config_ids", "status"],
+      "required": ["id", "schema_version", "packet_id", "query_id", "query_text", "answerability", "required_nuggets", "source_span_ids", "evidence", "alias_count", "chunk_config_ids", "status"],
       "properties": {
         "id": {"type": "string"}, "schema_version": {"const": 1}, "packet_id": {"type": "string"},
         "query_id": {"type": "string"}, "query_text": {"type": "string", "minLength": 1},
+        "answerability": {"$ref": "#/$defs/Query/properties/answerability"},
+        "required_nuggets": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["id", "text"], "properties": {"id": {"type": "string"}, "text": {"type": "string", "minLength": 1}}}},
         "source_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
         "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ReviewEvidence"}},
         "alias_count": {"type": "integer", "minimum": 1},
@@ -247,11 +252,15 @@
     },
     "ReviewSubmission": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "schema_version", "packet_id", "canonical_item_id", "annotator_id", "status", "retrieval_grade", "selected_source_span_ids", "topic_issue", "rationale"],
+      "required": ["id", "schema_version", "packet_id", "canonical_item_id", "annotator_id", "status", "answerability", "topic_relevance", "required_nugget_hits", "retrieval_grade", "selected_source_span_ids", "topic_issue", "rationale"],
       "properties": {
         "id": {"type": "string"}, "schema_version": {"const": 1}, "packet_id": {"type": "string"},
         "canonical_item_id": {"type": "string"}, "annotator_id": {"enum": ["annotator_a", "annotator_b", "adjudicator"]},
-        "status": {"enum": ["PENDING", "SUBMITTED"]}, "retrieval_grade": {"type": ["integer", "null"], "minimum": 0, "maximum": 3},
+        "status": {"enum": ["PENDING", "SUBMITTED"]},
+        "answerability": {"anyOf": [{"$ref": "#/$defs/Query/properties/answerability"}, {"type": "null"}]},
+        "topic_relevance": {"type": ["boolean", "null"]},
+        "required_nugget_hits": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "retrieval_grade": {"type": ["integer", "null"], "minimum": 0, "maximum": 3},
         "selected_source_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
         "topic_issue": {"enum": [null, "query_contract_issue", "source_span_contract_issue"]},
         "rationale": {"type": "string"}

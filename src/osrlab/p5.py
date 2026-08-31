@@ -365,6 +365,7 @@ def _quality(paths: LabPaths, chunk_config: str, receipt: dict[str, Any]) -> dic
         ranked_rows,
         chunk_by_id,
         judgments,
+        nuggets,
         {span["id"]: span["source_document_id"] for span in spans},
     )
     negatives = load_jsonl(

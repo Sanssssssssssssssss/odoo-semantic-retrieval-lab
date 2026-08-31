@@ -8,14 +8,16 @@ and a measured C2 performance baseline. Seed50 remains provisional until the hum
 is completed; it is not a SOTA benchmark or frozen gold set. See [PLAN.md](PLAN.md) for the full
 contract and the future SQL/PostgreSQL/pgvector boundary.
 
-The depth-20/30/40/50 pooling diagnostic has reached its preregistered saturation rule, but this is
-recorded only as `agent_diagnostic_pooling_stable=true`; formal `pooling_stable`,
-`human_review_complete`, and `seed_frozen` remain false.
+The benchmark-v2 contract now derives grades mechanically from topical relevance and required
+atomic-nugget coverage. This invalidates the earlier depth-20/30/40/50 Agent pooling package;
+that historical package remains fail-closed and is excluded until it is re-annotated and
+adjudicated under the new contract. Formal `pooling_stable`, `human_review_complete`, and
+`seed_frozen` remain false.
 
 The delivered provisional corpus contains 50,350 EvidenceUnits and four deterministic chunk
-variants (3,439 / 7,510 / 8,114 / 4,801 chunks). The depth-50 pool contains 16,738 judged
-candidates, 120 selected hard negatives, and a 9,185-row human-review queue. Statistical results
-remain diagnostic only; none of them promote a retriever.
+variants (3,439 / 7,510 / 8,114 / 4,801 chunks). The rebuilt Seed50 contains 76 atomic nuggets,
+145 canonical judgments, and 62 current seeded hard negatives. Statistical results remain
+diagnostic only; none of them promote a retriever.
 
 ## Run
 
@@ -30,6 +32,7 @@ remain diagnostic only; none of them promote a retriever.
 .\lab.ps1 p5
 .\lab.ps1 tune-e2
 .\lab.ps1 tune-e3
+.\lab.ps1 tune-recall
 .\lab.ps1 v0-bootstrap
 .\lab.ps1 v0-validate --annotator annotator_a --submission <completed.jsonl>
 .\lab.ps1 v0-adjudicate --annotator-a <a.jsonl> --annotator-b <b.jsonl>
@@ -44,12 +47,17 @@ cross-encoder candidate pools 10/20/50 and the preregistered sequence-length abl
 commands write hash-bound local receipts under `artifacts/tuning/`; Seed50 remains provisional,
 so a passing screen only earns evaluation on the future V0 benchmark.
 
+`tune-recall` runs the approved C2/C3 recall-v2 screen: deterministic contextual metadata,
+surface-only query decomposition, and source-ordinal parent/neighbor EvidenceCard expansion. It
+uses the RTX 4070 only for offline corpus embedding and measures online queries on CPU float32.
+See [reports/RECALL_V2.md](reports/RECALL_V2.md) for the approved provisional result.
+
 `v0-bootstrap` starts that V0 work without creating Agent-authored gold. It freezes 160 empty
 human-authored topic slots (96 public dev, 64 ignored shadow-hidden), canonicalizes the 9,185
 chunk-level Seed review rows into 6,439 exact query/source-span groups, and emits a 20-item blind
 tooling-calibration packet. The packet is Seed50 workflow validation only, not part of V0 gold.
-Annotators see only query text and canonical evidence: sampling reasons, provisional answerability,
-nuggets, and Agent labels remain in a hash-bound local audit receipt. `v0-validate` fail-closes
+Annotators see query text, frozen answerability, atomic nugget text, and candidate evidence; sampling
+reasons, gold spans, and Agent labels remain hidden. `v0-validate` mechanically derives the grade and fail-closes
 completed A/B submissions against the packet and evidence IDs. `v0-adjudicate` is the only way to
 create adjudicator input; it first validates both mutually hidden A/B submissions and then writes a
 disagreement-only packet under `.private/v0/` bound to both hashes.

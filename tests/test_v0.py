@@ -83,11 +83,12 @@ def test_v0_public_bootstrap_has_no_hidden_payload_and_is_hash_bound() -> None:
     items = load_jsonl(root / "calibration" / "review_items.jsonl")
     assert len(items) == 20
     sensitive = {
-        "selection_bucket", "selection_reasons", "intent", "answerability",
-        "no_answer_reason", "nuggets", "annotator_a", "annotator_b",
+        "selection_bucket", "selection_reasons", "intent",
+        "no_answer_reason", "annotator_a", "annotator_b",
         "adjudicator", "retrieval_grade", "rationale",
     }
     assert all(not sensitive.intersection(row) for row in items)
+    assert all("answerability" in row and "required_nuggets" in row for row in items)
     assert manifest["formal_gold_created"] is manifest["human_annotation_complete"] is False
 
 
@@ -96,8 +97,18 @@ def test_calibration_submission_validator_accepts_completed_blind_packet(tmp_pat
     template = load_jsonl(
         paths.root / PUBLIC_ROOT_RELATIVE / "calibration" / "annotator_a.template.jsonl"
     )
+    items = {
+        row["id"]: row
+        for row in load_jsonl(paths.root / PUBLIC_ROOT_RELATIVE / "calibration" / "review_items.jsonl")
+    }
     for row in template:
-        row.update(status="SUBMITTED", retrieval_grade=0, rationale="Candidate evidence is nonrelevant.")
+        row.update(
+            status="SUBMITTED",
+            answerability=items[row["canonical_item_id"]]["answerability"],
+            topic_relevance=False,
+            retrieval_grade=0,
+            rationale="Candidate evidence is nonrelevant.",
+        )
     submission = tmp_path / "annotator_a.jsonl"
     submission.write_text("".join(canonical_json(row) + "\n" for row in template), encoding="utf-8", newline="\n")
     report = validate_calibration_submission(submission, "annotator_a", paths)
@@ -124,8 +135,25 @@ def _completed_submission(paths: LabPaths, annotator_id: str, grade: int = 0) ->
     rows = load_jsonl(
         paths.root / PUBLIC_ROOT_RELATIVE / "calibration" / f"{annotator_id}.template.jsonl"
     )
+    items = {
+        row["id"]: row
+        for row in load_jsonl(paths.root / PUBLIC_ROOT_RELATIVE / "calibration" / "review_items.jsonl")
+    }
     for row in rows:
-        row.update(status="SUBMITTED", retrieval_grade=grade, rationale="Independent human review.")
+        item = items[row["canonical_item_id"]]
+        update = {
+            "status": "SUBMITTED",
+            "answerability": item["answerability"],
+            "topic_relevance": grade >= 1,
+            "retrieval_grade": grade,
+            "rationale": "Independent human review.",
+        }
+        if grade >= 1:
+            update["selected_source_span_ids"] = item["source_span_ids"][:1]
+        if grade >= 2:
+            hits = [nugget["id"] for nugget in item["required_nuggets"]]
+            update["required_nugget_hits"] = hits if grade == 3 else hits[:1]
+        row.update(update)
     return rows
 
 
@@ -137,7 +165,17 @@ def test_adjudication_is_disagreement_only_and_validated(tmp_path: Path) -> None
     paths = LabPaths.discover()
     a_rows = _completed_submission(paths, "annotator_a")
     b_rows = _completed_submission(paths, "annotator_b")
-    b_rows[0]["retrieval_grade"] = 1
+    first_item = {
+        row["id"]: row
+        for row in load_jsonl(
+            paths.root / PUBLIC_ROOT_RELATIVE / "calibration" / "review_items.jsonl"
+        )
+    }[b_rows[0]["canonical_item_id"]]
+    b_rows[0].update(
+        topic_relevance=True,
+        retrieval_grade=1,
+        selected_source_span_ids=first_item["source_span_ids"][:1],
+    )
     a_path, b_path = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
     _write_rows(a_path, a_rows)
     _write_rows(b_path, b_rows)
@@ -147,7 +185,14 @@ def test_adjudication_is_disagreement_only_and_validated(tmp_path: Path) -> None
     context = load_jsonl(root / "context.jsonl")
     assert [row["id"] for row in context] == [b_rows[0]["canonical_item_id"]]
     adjudication = load_jsonl(root / "adjudicator.template.jsonl")
-    adjudication[0].update(status="SUBMITTED", retrieval_grade=1, rationale="Resolved from both reviews.")
+    adjudication[0].update(
+        status="SUBMITTED",
+        answerability=first_item["answerability"],
+        topic_relevance=True,
+        retrieval_grade=1,
+        selected_source_span_ids=first_item["source_span_ids"][:1],
+        rationale="Resolved from both reviews.",
+    )
     submission = tmp_path / "adjudication.jsonl"
     _write_rows(submission, adjudication)
     report = validate_calibration_adjudication(root, submission, a_path, b_path, paths)

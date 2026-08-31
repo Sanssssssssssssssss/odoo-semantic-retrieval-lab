@@ -1,0 +1,59 @@
+{
+  "chunk_configs": [
+    "C2-structure-bounded",
+    "C3-structure-merged"
+  ],
+  "context_header": {
+    "fields": [
+      "odoo_version",
+      "module_path",
+      "canonical_page_path",
+      "ordered_node_types"
+    ],
+    "gold_metadata_used": false
+  },
+  "e2": {
+    "hierarchy_modes": [
+      "leaf",
+      "neighbor",
+      "parent_neighbor"
+    ]
+  },
+  "evaluation": {
+    "evidence_token_budget": 2048,
+    "no_answer_fixed_coverage": 0.8,
+    "promotion": {
+      "hard_negative_exposure_max_increase": 0.02,
+      "ndcg_at_10_max_drop": 0.01,
+      "recall_at_10_max_drop": 0.0,
+      "recall_at_5_max_drop": 0.005,
+      "required_completeness_min_gain": 0.025,
+      "retrieval_recall_at_5_min_gain": 0.01
+    }
+  },
+  "fusion": {
+    "candidate_depth": 100,
+    "rrf_k": 60,
+    "subquery_original_weight": 1.0,
+    "subquery_total_weight": 1.0
+  },
+  "latency": {
+    "concurrency": 1,
+    "minimum_requests": 1024,
+    "minimum_seconds": 5,
+    "warmup_requests": 20
+  },
+  "query_decomposition": {
+    "contract": "surface_text_only_diagnostic",
+    "max_queries": 4
+  },
+  "status": "preregistered_seed50_candidate_screen_only",
+  "variants": [
+    "M0-baseline-e2",
+    "M1-contextual-e2",
+    "M1-neighbor-evidence",
+    "M1-parent-neighbor-evidence",
+    "M1-M2-surface-decomposition"
+  ],
+  "version": 2
+}

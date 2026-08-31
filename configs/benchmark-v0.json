@@ -2,6 +2,7 @@
   "annotation": {
     "adjudication": "all_disagreements",
     "agent_final_gold_allowed": false,
+    "grade_derivation": "topic_relevance_plus_required_atomic_nugget_coverage",
     "independent_human_annotators": 2,
     "unjudged_is_nonrelevant": false
   },
@@ -34,6 +35,7 @@
   "source_snapshot_id": "32a8b8d77833f22b4bc74ed4ea78b6a82b5338fd",
   "status": "contract_frozen_topic_content_pending_human_annotation",
   "tooling_calibration": {
+    "assessment_contract_version": 2,
     "items": 20,
     "selection_reason_counts": {
       "agent_disagreement": 10,

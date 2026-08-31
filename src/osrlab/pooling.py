@@ -6,16 +6,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import ir_measures
 from scipy.stats import kendalltau
 
 from .baselines import _read_approved_trec_run
-from .benchmark import SNAPSHOT_ID, load_jsonl
+from .benchmark import SNAPSHOT_ID, derive_retrieval_grade, load_jsonl
 from .contract import validate_record
 from .gates import require_approval
 from .jsonio import canonical_json, sha256_file, stable_id, write_json, write_jsonl
 from .paths import LabPaths
-from .smoke import _read_qrels, _verify_manifest_outputs
+from .smoke import _read_qrels, _verify_manifest_outputs, evaluate_ranking
 from .verify import verify_source
 
 
@@ -50,10 +49,37 @@ def _agent_pool_is_stable(depth_rows: list[dict[str, Any]]) -> bool:
 
 def _annotation_label(row: dict[str, Any]) -> tuple[Any, ...]:
     return (
-        row["retrieval_grade"],
+        row["topic_relevance"],
+        tuple(row["required_nugget_hits"]),
         tuple(row["selected_source_span_ids"]),
-        tuple(row["selected_nugget_ids"]),
     )
+
+
+def _validate_pool_annotation(
+    row: dict[str, Any],
+    query: dict[str, Any],
+    required_nugget_ids: set[str],
+    visible_spans: set[str],
+) -> None:
+    if row["answerability"] != query["answerability"]:
+        raise RuntimeError(f"Pool annotation answerability drift: {row['id']}")
+    hits = set(row["required_nugget_hits"])
+    grade = derive_retrieval_grade(
+        topic_relevance=row["topic_relevance"],
+        required_nugget_hits=hits,
+        required_nugget_ids=required_nugget_ids,
+    )
+    if row["retrieval_grade"] != grade:
+        raise RuntimeError(f"Pool annotation grade is not mechanically derived: {row['id']}")
+    if set(row["selected_nugget_ids"]) != hits:
+        raise RuntimeError(f"Pool annotation nugget fields disagree: {row['id']}")
+    selected_spans = set(row["selected_source_span_ids"])
+    if grade == 0 and selected_spans:
+        raise RuntimeError(f"Grade 0 cannot bind evidence: {row['id']}")
+    if grade >= 1 and not selected_spans:
+        raise RuntimeError(f"Topical annotation lacks a source span: {row['id']}")
+    if not selected_spans <= visible_spans:
+        raise RuntimeError(f"Annotation selects a non-visible source span: {row['id']}")
 
 
 def _negative_classes(candidate: dict[str, Any], query: dict[str, Any]) -> list[str]:
@@ -270,6 +296,9 @@ def _write_adjudicated_review_outputs(
                 "query_id": row["query"]["id"],
                 "pool_item_id": row["pool_item_id"],
                 "selection_reasons": row["selection_reasons"],
+                "answerability": row["query"]["answerability"],
+                "human_topic_relevance": None,
+                "human_required_nugget_hits": [],
                 "human_grade": None,
                 "selected_source_span_ids": [],
                 "selected_nugget_ids": [],
@@ -343,18 +372,34 @@ def _seal_completed_annotations(
         missing = [path.name for path in completed if not path.is_file()]
         raise RuntimeError(f"Incomplete annotation package: {', '.join(missing)}")
 
-    context_ids = [row["id"] for row in load_jsonl(output / "active_frontier_context.jsonl")]
+    contexts = {
+        row["id"]: row for row in load_jsonl(output / "active_frontier_context.jsonl")
+    }
+    context_ids = list(contexts)
+    queries = {
+        row["id"]: row for row in load_jsonl(benchmark_root / "queries.jsonl")
+    }
+    required_by_query: dict[str, set[str]] = defaultdict(set)
+    for nugget in load_jsonl(benchmark_root / "nuggets.jsonl"):
+        if nugget["required"]:
+            required_by_query[nugget["query_id"]].add(nugget["id"])
     for name in data_names:
         rows = load_jsonl(annotation_dir / name)
         ids = [row["id"] for row in rows]
         if ids != context_ids or len(ids) != len(set(ids)):
             raise RuntimeError(f"Annotation coverage/order mismatch: {name}")
         for row in rows:
-            grade = row["retrieval_grade"]
-            if grade in (0, 1) and row["selected_nugget_ids"]:
-                raise RuntimeError(f"Grade {grade} cannot bind nuggets: {row['id']}")
-            if grade >= 2 and (not row["selected_nugget_ids"] or not row["selected_source_span_ids"]):
-                raise RuntimeError(f"Positive annotation lacks evidence binding: {row['id']}")
+            context = contexts[row["id"]]
+            _validate_pool_annotation(
+                row,
+                queries[row["query_id"]],
+                required_by_query[row["query_id"]],
+                {
+                    span_id
+                    for fragment in context["span_fragments"]
+                    for span_id in fragment["source_span_ids"]
+                },
+            )
 
     reports = {
         name: json.loads((annotation_dir / name).read_text(encoding="utf-8"))
@@ -453,6 +498,12 @@ def _write_future_frontiers(
     paths: LabPaths,
 ) -> None:
     approval = require_approval("p3b-depth20-agent-annotations", paths)
+    queries = {
+        row["id"]: row
+        for row in load_jsonl(
+            paths.root / "benchmarks" / "seed50" / "provisional" / "queries.jsonl"
+        )
+    }
     pool_manifest_path = output / "manifest.json"
     if approval["pool_manifest_sha256"] != sha256_file(pool_manifest_path):
         raise RuntimeError("Depth20 approval does not bind the current pool manifest")
@@ -483,6 +534,9 @@ def _write_future_frontiers(
                     "chunk_config_hash": item["chunk_config_hash"],
                     "chunk_id": item["chunk_id"],
                     "annotator_id": None,
+                    "answerability": queries[item["query_id"]]["answerability"],
+                    "topic_relevance": None,
+                    "required_nugget_hits": [],
                     "retrieval_grade": None,
                     "selected_source_span_ids": [],
                     "selected_nugget_ids": [],
@@ -542,10 +596,12 @@ def _seal_future_frontier(
 
     contexts = {row["id"]: row for row in load_jsonl(frontier_root / "context.jsonl")}
     context_ids = sorted(contexts)
-    nuggets = {
-        row["id"]: row
-        for row in load_jsonl(paths.root / "benchmarks" / "seed50" / "provisional" / "nuggets.jsonl")
-    }
+    benchmark_root = paths.root / "benchmarks" / "seed50" / "provisional"
+    queries = {row["id"]: row for row in load_jsonl(benchmark_root / "queries.jsonl")}
+    required_by_query: dict[str, set[str]] = defaultdict(set)
+    for nugget in load_jsonl(benchmark_root / "nuggets.jsonl"):
+        if nugget["required"]:
+            required_by_query[nugget["query_id"]].add(nugget["id"])
     for name in data_names:
         rows = load_jsonl(annotation_dir / name)
         if [row["id"] for row in rows] != context_ids or len(rows) != len(contexts):
@@ -557,17 +613,12 @@ def _seal_future_frontier(
                 for fragment in context["span_fragments"]
                 for span_id in fragment["source_span_ids"]
             }
-            grade = row["retrieval_grade"]
-            if grade == 0 and (row["selected_source_span_ids"] or row["selected_nugget_ids"]):
-                raise RuntimeError(f"Grade 0 cannot bind evidence: {row['id']}")
-            if grade == 1 and row["selected_nugget_ids"]:
-                raise RuntimeError(f"Grade 1 cannot bind nuggets: {row['id']}")
-            if grade >= 2 and (not row["selected_source_span_ids"] or not row["selected_nugget_ids"]):
-                raise RuntimeError(f"Positive annotation lacks evidence binding: {row['id']}")
-            if not set(row["selected_source_span_ids"]) <= visible_spans:
-                raise RuntimeError(f"Annotation selects a non-visible source span: {row['id']}")
-            if any(nuggets[nugget_id]["query_id"] != row["query_id"] for nugget_id in row["selected_nugget_ids"]):
-                raise RuntimeError(f"Annotation selects a cross-query nugget: {row['id']}")
+            _validate_pool_annotation(
+                row,
+                queries[row["query_id"]],
+                required_by_query[row["query_id"]],
+                visible_spans,
+            )
 
     reports = {
         name: json.loads((annotation_dir / name).read_text(encoding="utf-8"))
@@ -578,7 +629,6 @@ def _seal_future_frontier(
         if reported_sha != sha256_file(annotation_dir / data_name):
             raise RuntimeError(f"Annotation report hash mismatch: depth{frontier_manifest['depth']}/{report_name}")
 
-    benchmark_root = paths.root / "benchmarks" / "seed50" / "provisional"
     evidence_root = paths.root / "corpus" / "derived" / SNAPSHOT_ID / "evidence"
     input_paths = {
         "pool_manifest.json": pool_root / "manifest.json",
@@ -637,8 +687,7 @@ def _ndcg10(
         for query_id, ranking in rankings.items()
         if query_id in qrels
     }
-    measure = ir_measures.nDCG @ 10
-    return float(ir_measures.calc_aggregate([measure], qrels, run)[measure])
+    return evaluate_ranking(qrels, run)["ndcg_at_10"]
 
 
 def _write_stability_report(
@@ -998,7 +1047,9 @@ def build_pool(paths: LabPaths | None = None) -> dict[str, Any]:
                 {
                     nugget_id
                     for span_id in selected_spans
-                    for nugget_id in judgment_by_key[(item["query_id"], span_id)]["nugget_ids"]
+                    for nugget_id in judgment_by_key[(item["query_id"], span_id)][
+                        "required_nugget_hits"
+                    ]
                 }
             )
         templates.append(
@@ -1009,6 +1060,9 @@ def build_pool(paths: LabPaths | None = None) -> dict[str, Any]:
                 "chunk_config_hash": item["chunk_config_hash"],
                 "chunk_id": item["chunk_id"],
                 "annotator_id": None,
+                "answerability": query_by_id[item["query_id"]]["answerability"],
+                "topic_relevance": None if known is None else known >= 1,
+                "required_nugget_hits": selected_nuggets,
                 "retrieval_grade": known,
                 "selected_source_span_ids": selected_spans,
                 "selected_nugget_ids": selected_nuggets,

@@ -61,7 +61,7 @@ if ($Profile) {
     $CliArgs += $Profile
 }
 $CliArgs += $RemainingArgs
-if ($Command -in @("p5", "tune-e3")) {
+if ($Command -in @("p5", "tune-e3", "tune-recall")) {
     if (-not (Test-Path -LiteralPath $GpuPython)) {
         throw "GPU environment is missing. Run: .\lab.ps1 gpu-bootstrap"
     }

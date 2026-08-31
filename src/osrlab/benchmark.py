@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,26 @@ NO_ANSWER_REASONS = {
     "out_of_scope",
 }
 SMOKE_SLICES = {"lexical", "semantic", "multi_evidence", "no_answer"}
-TOPIC_CONTRACT_CORRECTIONS = {"S007", "S012", "S041", "S042"}
+TOPIC_CONTRACT_CORRECTIONS = {"S007", "S012", "S026", "S041", "S042"}
+
+
+def derive_retrieval_grade(
+    *,
+    topic_relevance: bool,
+    required_nugget_hits: set[str] | list[str],
+    required_nugget_ids: set[str] | list[str],
+) -> int:
+    """Derive the only allowed 0-3 grade from topic and atomic-nugget coverage."""
+    hits, required = set(required_nugget_hits), set(required_nugget_ids)
+    if not hits <= required:
+        raise RuntimeError("Required nugget hits contain an unknown nugget")
+    if not topic_relevance:
+        if hits:
+            raise RuntimeError("Irrelevant evidence cannot hit a required nugget")
+        return 0
+    if not hits:
+        return 1
+    return 3 if required and hits == required else 2
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -236,6 +255,7 @@ def _project_qrels(
     output_root: Path,
     queries: list[dict[str, Any]],
     judgments: list[dict[str, Any]],
+    nuggets: list[dict[str, Any]],
 ) -> dict[str, Any]:
     chunks_root = paths.root / "corpus" / "derived" / SNAPSHOT_ID / "chunks"
     c1_chunks = load_jsonl(chunks_root / "C1-section-native" / "chunks.jsonl")
@@ -245,6 +265,10 @@ def _project_qrels(
             unit_id = fragment["evidence_unit_id"]
             unit_token_counts[unit_id] = max(unit_token_counts.get(unit_id, 0), fragment["unit_token_end"])
     answerable_ids = {query["id"] for query in queries if query["answerability"] == "answerable"}
+    required_by_query: dict[str, set[str]] = defaultdict(set)
+    for nugget in nuggets:
+        if nugget["required"]:
+            required_by_query[nugget["query_id"]].add(nugget["id"])
     judgment_by_span: dict[str, list[dict[str, Any]]] = {}
     for judgment in judgments:
         if judgment["query_id"] in answerable_ids:
@@ -253,7 +277,7 @@ def _project_qrels(
     query_file = output_root / "beir" / "queries.jsonl"
     for config_dir in sorted(path for path in chunks_root.glob("C*") if path.is_dir()):
         chunks = load_jsonl(config_dir / "chunks.jsonl")
-        projected: dict[tuple[str, str], int] = {}
+        projected_state: dict[tuple[str, str], dict[str, Any]] = {}
         partial_positive_downgrades = 0
         for chunk in chunks:
             for fragment in chunk["span_fragments"]:
@@ -263,12 +287,25 @@ def _project_qrels(
                 )
                 for span_id in fragment["source_span_ids"]:
                     for judgment in judgment_by_span.get(span_id, []):
-                        grade = judgment["grade"]
-                        if grade >= 2 and not full:
-                            grade = 1
-                            partial_positive_downgrades += 1
                         key = judgment["query_id"], chunk["id"]
-                        projected[key] = max(projected.get(key, 0), grade)
+                        state = projected_state.setdefault(
+                            key, {"topic_relevance": False, "required_nugget_hits": set()}
+                        )
+                        state["topic_relevance"] |= judgment["topic_relevance"]
+                        if judgment["required_nugget_hits"] and not full:
+                            partial_positive_downgrades += 1
+                        elif full:
+                            state["required_nugget_hits"].update(
+                                judgment["required_nugget_hits"]
+                            )
+        projected = {
+            key: derive_retrieval_grade(
+                topic_relevance=state["topic_relevance"],
+                required_nugget_hits=state["required_nugget_hits"],
+                required_nugget_ids=required_by_query[key[0]],
+            )
+            for key, state in projected_state.items()
+        }
         derived = output_root / "derived" / config_dir.name
         qrels_dir = derived / "qrels"
         rows = sorted((query_id, chunk_id, grade) for (query_id, chunk_id), grade in projected.items())
@@ -299,7 +336,7 @@ def _project_qrels(
             "evaluated_topics": len(loaded_queries),
             "answerable_topics": len(loaded_qrels),
             "partial_positive_fragments_downgraded_to_grade_1": partial_positive_downgrades,
-            "policy": "full EvidenceUnit fragment retains canonical grade; partial positive fragment is grade 1 only",
+            "policy": "grade is derived from topic relevance and the union of fully covered required atomic nuggets; partial positive fragments contribute topic relevance only",
             "beir_generic_data_loader_roundtrip": True,
             "beir_qrels_sha256": sha256_file(qrels_dir / "seed.tsv"),
             "trec_qrels_sha256": sha256_file(derived / "qrels.seed.trec"),
@@ -369,14 +406,43 @@ def build_seed50(paths: LabPaths | None = None) -> dict[str, Any]:
             }
             validate_record("Nugget", nugget, paths)
             nuggets.append(nugget)
+        required_ids = {
+            nugget_ids[source["local_id"]]
+            for source in item["nuggets"]
+            if source["required"]
+        }
         for source in item["judgments"]:
+            required_hits = [
+                nugget_ids[local_id]
+                for local_id in source["local_nugget_ids"]
+                if local_id in nugget_ids and nugget_ids[local_id] in required_ids
+            ]
+            topic_relevance = source["grade"] >= 1
             judgment = {
-                "id": "judgment-" + stable_id(query_id, source["source_span_id"], str(source["grade"])),
+                "id": "judgment-"
+                + stable_id(
+                    query_id,
+                    source["source_span_id"],
+                    canonical_json(
+                        {
+                            "topic_relevance": topic_relevance,
+                            "required_nugget_hits": required_hits,
+                            "answerability": item["answerability"],
+                        }
+                    ),
+                ),
                 "schema_version": 1,
                 "query_id": query_id,
                 "source_span_id": source["source_span_id"],
-                "nugget_ids": [nugget_ids[local_id] for local_id in source["local_nugget_ids"]],
-                "grade": source["grade"],
+                "nugget_ids": required_hits,
+                "topic_relevance": topic_relevance,
+                "required_nugget_hits": required_hits,
+                "answerability": item["answerability"],
+                "grade": derive_retrieval_grade(
+                    topic_relevance=topic_relevance,
+                    required_nugget_hits=required_hits,
+                    required_nugget_ids=required_ids,
+                ),
                 "rationale": source["rationale"],
                 "status": "provisional",
             }
@@ -416,7 +482,7 @@ def build_seed50(paths: LabPaths | None = None) -> dict[str, Any]:
     agreement = _agreement(submissions["annotator_a"], submissions["annotator_b"])
     agreement["topic_contract_correction_brief_ids"] = sorted(TOPIC_CONTRACT_CORRECTIONS)
     write_json(output_root / "agreement_report.json", agreement, paths)
-    projections = _project_qrels(paths, output_root, queries, judgments)
+    projections = _project_qrels(paths, output_root, queries, judgments, nuggets)
 
     no_answer_ids = {item["brief_id"] for item in adjudicated if item["answerability"] == "no_answer"}
     disagreement_ids = set(agreement["substantive_disagreement_brief_ids"])

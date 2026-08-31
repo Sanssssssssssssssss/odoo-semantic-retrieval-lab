@@ -350,7 +350,7 @@ def _write_run(
         cards_by_query[query["id"]] = cards
         card_diagnostics[query["id"]] = diagnostics
     fixed["source_document_ndcg_at_10"] = _source_document_ndcg(
-        answerable_ids, rankings, chunk_by_id, judgments, span_to_document
+        answerable_ids, rankings, chunk_by_id, judgments, nuggets, span_to_document
     )
     fixed.update(
         _evidence_metrics(

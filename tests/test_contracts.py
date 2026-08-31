@@ -17,7 +17,7 @@ from osrlab.baselines import (
     _preflight_persisted_rankings,
     _read_approved_trec_run,
 )
-from osrlab.benchmark import validate_topic_briefs
+from osrlab.benchmark import derive_retrieval_grade, validate_topic_briefs
 from osrlab.chunking import _c1_scoring_windows, _c3, _chunk_configs, _make_chunk, _model_spec, _tokenizer, _windows, verify_evidence_snapshot
 from osrlab.extraction import EvidenceCollector, _normalize_rendered
 from osrlab.gates import require_approval
@@ -34,12 +34,102 @@ from osrlab.pooling import (
     _run_provenance,
     _system_order,
     _true_sibling_headings,
+    _validate_pool_annotation,
 )
 from osrlab.performance import _framework_overhead, _percentiles, _runtime_initialization_ns
 from osrlab.p5 import _matches
 from osrlab.diagnostics import _answerability_cv, _auc_ap, _holm, _ndcg10
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
-from osrlab.tuning import BM25F, _rrf, _tmm_convex
+from osrlab.tuning import (
+    BM25F,
+    _atomic_subqueries,
+    _context_header,
+    _configured_chunk_ids,
+    _expanded_chunks,
+    _rrf,
+    _tmm_convex,
+)
+
+
+def test_recall_context_and_decomposition_use_only_surface_metadata() -> None:
+    assert _configured_chunk_ids({"chunk_config": "C2"}) == ["C2"]
+    assert _configured_chunk_ids({"chunk_configs": ["C2", "C3"]}) == ["C2", "C3"]
+    chunk = {
+        "source_uri": "https://www.odoo.com/documentation/19.0/applications/sales/sales.html#flow",
+        "span_fragments": [
+            {"evidence_unit_id": "u1"},
+            {"evidence_unit_id": "u2"},
+            {"evidence_unit_id": "u1"},
+        ],
+    }
+    header = _context_header(
+        chunk, {"u1": {"node_type": "paragraph"}, "u2": {"node_type": "code"}}
+    )
+    assert header == (
+        "Odoo 19 | module=sales/sales | page=applications/sales/sales.html | "
+        "types=paragraph,code"
+    )
+    assert _atomic_subqueries("Create a quotation, then confirm it; send the invoice") == [
+        "Create a quotation, then confirm it; send the invoice",
+        "Create a quotation",
+        "Create a quotation confirm it",
+        "Create a quotation send the invoice",
+    ]
+    assert _atomic_subqueries("Where is the warehouse setting?") == [
+        "Where is the warehouse setting?"
+    ]
+
+
+def test_retrieval_grade_is_derived_from_atomic_nugget_coverage() -> None:
+    required = {"n1", "n2"}
+    assert derive_retrieval_grade(
+        topic_relevance=False, required_nugget_hits=set(), required_nugget_ids=required
+    ) == 0
+    assert derive_retrieval_grade(
+        topic_relevance=True, required_nugget_hits=set(), required_nugget_ids=required
+    ) == 1
+    assert derive_retrieval_grade(
+        topic_relevance=True, required_nugget_hits={"n1"}, required_nugget_ids=required
+    ) == 2
+    assert derive_retrieval_grade(
+        topic_relevance=True, required_nugget_hits=required, required_nugget_ids=required
+    ) == 3
+    with pytest.raises(RuntimeError, match="unknown nugget"):
+        derive_retrieval_grade(
+            topic_relevance=True,
+            required_nugget_hits={"not-required"},
+            required_nugget_ids=required,
+        )
+
+
+def test_neighbor_expansion_uses_source_ordinal_not_chunk_id() -> None:
+    units = {
+        "u1": {"ordinal": 1},
+        "u2": {"ordinal": 2},
+        "u3": {"ordinal": 3},
+    }
+
+    def chunk(chunk_id: str, unit_id: str) -> dict:
+        return {
+            "id": chunk_id,
+            "source_document_id": "doc",
+            "section_ids": [f"section-{unit_id}"],
+            "parent_section_ids": ["parent"],
+            "span_fragments": [
+                {
+                    "evidence_unit_id": unit_id,
+                    "unit_token_start": 0,
+                    "unit_token_end": 1,
+                    "unit_char_start": 0,
+                }
+            ],
+        }
+
+    chunks = [chunk("z", "u1"), chunk("a", "u2"), chunk("m", "u3")]
+    rankings = {"q": [{"query_id": "q", "rank": 1, "chunk_id": "a", "score": 1.0}]}
+    expanded_rankings, expanded = _expanded_chunks(rankings, chunks, units, "neighbor")
+    synthetic = expanded[expanded_rankings["q"][0]["chunk_id"]]
+    assert [row["evidence_unit_id"] for row in synthetic["span_fragments"]] == ["u2", "u1", "u3"]
 
 
 def test_path_allowlist_rejects_source_and_external_paths(tmp_path: Path) -> None:
@@ -279,6 +369,12 @@ def test_ir_metrics_golden_fixture_uses_grade_two_binary_threshold() -> None:
     assert metrics["map"] == 1.0
     assert metrics["judged_at_10"] == pytest.approx(2 / 3)
     assert metrics["bpref"] == 1.0
+
+    tied = evaluate_ranking(
+        {"q": {"a": 3, "b": 0}},
+        {"q": {"b": 1.0, "a": 1.0}},
+    )
+    assert tied["ndcg_at_10"] == 1.0
 
 
 def test_evidence_cards_remove_duplicate_fragments_and_respect_budget() -> None:
@@ -564,10 +660,25 @@ def test_pool_system_order_and_kendall_tau_are_deterministic() -> None:
 def test_pool_review_label_and_negative_provenance_are_deterministic() -> None:
     row = {
         "retrieval_grade": 1,
+        "topic_relevance": True,
+        "required_nugget_hits": [],
         "selected_source_span_ids": ["span-1"],
         "selected_nugget_ids": [],
     }
-    assert _annotation_label(row) == (1, ("span-1",), ())
+    assert _annotation_label(row) == (True, (), ("span-1",))
+    _validate_pool_annotation(
+        {**row, "id": "item", "answerability": "answerable"},
+        {"answerability": "answerable"},
+        {"n1"},
+        {"span-1"},
+    )
+    with pytest.raises(RuntimeError, match="mechanically derived"):
+        _validate_pool_annotation(
+            {**row, "id": "item", "answerability": "answerable", "retrieval_grade": 2},
+            {"answerability": "answerable"},
+            {"n1"},
+            {"span-1"},
+        )
     candidate = {
         "provenance": ["rerank_candidate", "semantic_candidate", "wrong_module_candidate"]
     }
