@@ -504,6 +504,17 @@ received fresh independent Agent approval. Promotion now requires:
 SQL/pgvector, ANN, generation, LLM judges, and main-Agent integration remain later experiments, not
 implicit parts of this promotion step.
 
+## 16. Retrieval Tuning V1（Seed50 候选筛选）
+
+- `configs/retrieval-tuning-v1.json` 预注册 C2 上的 RRF/TMM fusion、proper BM25F、
+  parent/sibling EvidenceCard、ONNX CPU 和 E3 rerank 消融网格。
+- 参数选择只报告 source/fact-group grouped-CV 的 out-of-fold 结果；完整 Seed50 结果
+  只能用于诊断，不能冻结默认参数。
+- CPU 是 E2 主线；GPU 仅用于 E3 消融和胜出检索方案的一致性对照。
+- E3 保留为可选质量层，候选池、序列长度、hard-negative 暴露和端到端延迟必须共同过门，
+  不因单个 Recall 指标上升而进入默认路径。
+- 第一轮不实现 RM3、完整 SPLADE、ColBERT、HyDE、在线 multi-query 或 dense fine-tune。
+
 ## References
 
 - Odoo documentation source: https://github.com/odoo/documentation

@@ -27,8 +27,18 @@ remain diagnostic only; none of them promote a retriever.
 .\lab.ps1 baseline
 .\lab.ps1 pool
 .\lab.ps1 perf
+.\lab.ps1 p5
+.\lab.ps1 tune-e2
+.\lab.ps1 tune-e3
 .\lab.ps1 all -Profile seed
 ```
+
+`tune-e2` runs the preregistered C2 CPU candidate screen: RRF/TMM fusion replay, proper
+BM25F, deterministic parent/sibling EvidenceCard expansion, and PyTorch/ONNX/dynamic-int8
+BGE query-encoder comparisons. `tune-e3` uses the isolated GPU environment to compare
+cross-encoder candidate pools 10/20/50 and the preregistered sequence-length ablation. Both
+commands write hash-bound local receipts under `artifacts/tuning/`; Seed50 remains provisional,
+so a passing screen only earns evaluation on the future V0 benchmark.
 
 Every cross-stage command is receipt-gated. `all -Profile seed` checks every Agent approval before
 its first write and returns an explicit `agent_provisional_complete_human_review_pending` state when

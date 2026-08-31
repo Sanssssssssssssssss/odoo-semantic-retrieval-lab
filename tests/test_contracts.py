@@ -39,6 +39,7 @@ from osrlab.performance import _framework_overhead, _percentiles, _runtime_initi
 from osrlab.p5 import _matches
 from osrlab.diagnostics import _answerability_cv, _auc_ap, _holm, _ndcg10
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
+from osrlab.tuning import BM25F, _rrf, _tmm_convex
 
 
 def test_path_allowlist_rejects_source_and_external_paths(tmp_path: Path) -> None:
@@ -405,6 +406,46 @@ def test_rrf_uses_fixed_k_and_chunk_id_tie_break() -> None:
     ranking = _hybrid(sparse, dense)["q"]
     assert [item["chunk_id"] for item in ranking] == ["a", "b"]
     assert ranking[0]["score"] == pytest.approx(1 / 61 + 1 / 62)
+
+
+def test_tuning_rrf_weight_and_tmm_are_deterministic() -> None:
+    sparse = {"q": [{"rank": 1, "chunk_id": "a", "score": 3.0}]}
+    dense = {"q": [{"rank": 1, "chunk_id": "b", "score": 0.9}]}
+    assert _rrf(sparse, dense, k=60, sparse_weight=2.0)["q"][0]["chunk_id"] == "a"
+    chunks = [{"id": "a"}, {"id": "b"}]
+    queries = [{"id": "q"}]
+    tmm = _tmm_convex(
+        np.asarray([[3.0, 0.0]], dtype=np.float32),
+        np.asarray([[0.0, 0.9]], dtype=np.float32),
+        chunks,
+        queries,
+        semantic_alpha=0.8,
+        depth=2,
+    )["q"]
+    assert [row["chunk_id"] for row in tmm] == ["b", "a"]
+
+
+def test_bm25f_combines_field_tf_before_saturation() -> None:
+    low = BM25F(
+        [["needle"], []],
+        [[], ["needle"]],
+        k1=1.5,
+        b_heading=0.0,
+        b_body=0.0,
+        heading_boost=1.0,
+        body_boost=1.0,
+    ).score(["needle"])
+    high = BM25F(
+        [["needle"], []],
+        [[], ["needle"]],
+        k1=1.5,
+        b_heading=0.0,
+        b_body=0.0,
+        heading_boost=4.0,
+        body_boost=1.0,
+    ).score(["needle"])
+    assert low[0] == pytest.approx(low[1])
+    assert high[0] > high[1]
 
 
 def test_refresh_rejects_tampered_persisted_trec_run(tmp_path: Path) -> None:

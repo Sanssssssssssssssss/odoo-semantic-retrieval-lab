@@ -1,0 +1,50 @@
+{
+  "chunk_config": "C2-structure-bounded",
+  "e2": {
+    "bm25f": {
+      "b_body": 0.75,
+      "b_heading": 0.3,
+      "body_boost": 1.0,
+      "heading_boosts": [1.0, 2.0, 4.0],
+      "k1": 1.5
+    },
+    "fusion": {
+      "candidate_depth": 100,
+      "rrf_k": [10, 30, 60, 100],
+      "tmm_convex_semantic_alpha": [0.6, 0.7, 0.8],
+      "weighted_rrf_sparse_weight_diagnostic_only": [0.75, 1.5, 2.0]
+    },
+    "hierarchy_modes": ["leaf", "parent", "neighbor", "parent_neighbor"],
+    "onnx": {
+      "graph_optimization": "ORT_ENABLE_ALL",
+      "intra_op_threads": 1,
+      "latency_requests": 1024,
+      "quantization": "dynamic_per_channel_qint8",
+      "warmup_requests": 20
+    }
+  },
+  "e3": {
+    "batch_size": 32,
+    "candidate_pool_grid": [10, 20, 50],
+    "latency_requests": 100,
+    "max_length_grid_at_pool_20": [256, 384, 512],
+    "warmup_requests": 20
+  },
+  "evaluation": {
+    "binary_relevance_grade": 2,
+    "evidence_token_budget": 2048,
+    "grouped_cv_folds": 5,
+    "hard_negative_exposure_depth": 5,
+    "no_answer_fixed_coverage": 0.8,
+    "promotion": {
+      "hard_negative_exposure_max_increase": 0.02,
+      "ndcg_at_10_max_drop": 0.01,
+      "recall_at_10_max_drop": 0.0,
+      "recall_at_5_max_drop": 0.0,
+      "required_completeness_min_gain": 0.025,
+      "retrieval_recall_at_5_min_gain": 0.01
+    }
+  },
+  "status": "preregistered_seed50_candidate_screen_only",
+  "version": 1
+}

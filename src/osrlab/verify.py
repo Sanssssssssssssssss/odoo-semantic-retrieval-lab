@@ -14,7 +14,7 @@ EXPECTED_MANIFEST_SHA256 = "c779918daa43c93ef715c3a83ce759019a82629f23fb22c987fc
 
 def _git(path: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", "-C", str(path), *args],
+        ["git", "-c", f"safe.directory={path}", "-C", str(path), *args],
         check=True,
         capture_output=True,
         text=True,
@@ -32,7 +32,16 @@ def verify_source(paths: LabPaths | None = None) -> dict[str, Any]:
     head = _git(paths.docs, "rev-parse", "HEAD")
     status = _git(paths.docs, "status", "--porcelain")
     symbolic = subprocess.run(
-        ["git", "-C", str(paths.docs), "symbolic-ref", "-q", "HEAD"],
+        [
+            "git",
+            "-c",
+            f"safe.directory={paths.docs}",
+            "-C",
+            str(paths.docs),
+            "symbolic-ref",
+            "-q",
+            "HEAD",
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",

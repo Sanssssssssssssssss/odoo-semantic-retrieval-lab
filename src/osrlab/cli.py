@@ -16,10 +16,23 @@ from .performance import run_performance
 from .pooling import build_pool
 from .receipts import create_environment_receipt
 from .smoke import run_smoke
+from .tuning import run_e2_tuning, run_e3_tuning
 from .verify import verify_source
 
 
-COMMANDS = ("verify", "extract", "chunk", "smoke", "baseline", "pool", "perf", "p5", "all")
+COMMANDS = (
+    "verify",
+    "extract",
+    "chunk",
+    "smoke",
+    "baseline",
+    "pool",
+    "perf",
+    "p5",
+    "tune-e2",
+    "tune-e3",
+    "all",
+)
 SEED_APPROVALS = (
     "p0",
     "p1a",
@@ -163,6 +176,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        return 0
+    if args.command == "tune-e2":
+        print(json.dumps(run_e2_tuning(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "tune-e3":
+        print(json.dumps(run_e3_tuning(paths), indent=2, ensure_ascii=False))
         return 0
     if args.command == "all":
         print(json.dumps(run_seed_pipeline(paths, result), indent=2, ensure_ascii=False))
