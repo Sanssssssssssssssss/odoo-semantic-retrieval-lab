@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 .cache/
+.private/
 artifacts/
 indexes/
 corpus/raw/*/

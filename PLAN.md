@@ -515,6 +515,29 @@ implicit parts of this promotion step.
   不因单个 Recall 指标上升而进入默认路径。
 - 第一轮不实现 RM3、完整 SPLADE、ColBERT、HyDE、在线 multi-query 或 dense fine-tune。
 
+## 17. V0 Benchmark Bootstrap
+
+- `configs/benchmark-v0.json` freezes 160 empty human-authored slots: 96 dev and 64
+  shadow-hidden, including split-specific intent, difficulty, answerability, topology, and
+  no-answer quotas. It does not contain authored queries or gold.
+- Public dev slots are versioned under `benchmarks/v0/bootstrap/public/`. Shadow-hidden slots are
+  written only below gitignored `.private/v0/`; the public repository receives only their count and
+  SHA-256 commitment. Any tracked hidden path or hidden query/gold field fails validation.
+- Seed50's 9,185 chunk-level review candidates canonicalize by exact
+  `(query_id, sorted source_span_ids)` while retaining every chunk/config alias. The current
+  deterministic output has 6,439 groups. Human labels target the complete canonical SourceSpans;
+  chunk-local partial coverage remains recoverable through pool-item aliases and is handled only
+  when derived chunk qrels are projected.
+- A 20-item packet checks the double-blind workflow with 10 Agent disagreements, 5 no-answer
+  candidates, and 5 stratified agreements. Annotators receive only query text and canonical
+  evidence; selection strata, answerability metadata, provisional nuggets, and all Agent labels are
+  confined to a hash-bound local sampling receipt. Adjudicator input is generated only after both
+  A/B submissions validate and contains disagreements only. This packet is tooling calibration
+  only and never becomes V0 gold.
+- Formal work remains human-only: author the first 20 dev calibration topics, collect two mutually
+  hidden submissions, adjudicate every disagreement, revise instructions if needed, then collect
+  the remaining 140 topics. Agents may retrieve candidates but cannot issue final gold.
+
 ## References
 
 - Odoo documentation source: https://github.com/odoo/documentation

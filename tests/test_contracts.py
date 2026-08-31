@@ -47,6 +47,7 @@ def test_path_allowlist_rejects_source_and_external_paths(tmp_path: Path) -> Non
     paths = LabPaths(root)
     assert paths.require_write_path("artifacts/run.json") == (root / "artifacts/run.json").resolve()
     assert paths.require_write_path(".venv-gpu/receipt.json") == (root / ".venv-gpu/receipt.json").resolve()
+    assert paths.require_write_path(".private/v0/hidden.jsonl") == (root / ".private/v0/hidden.jsonl").resolve()
     with pytest.raises(PathBoundaryError):
         paths.require_write_path(root.parent / "erp-openai" / "result.json")
     with pytest.raises(PathBoundaryError):

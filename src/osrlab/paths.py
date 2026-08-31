@@ -32,6 +32,7 @@ class LabPaths:
                 ".venv",
                 ".venv-gpu",
                 ".cache",
+                ".private",
                 ".tools",
                 "artifacts",
                 "indexes",

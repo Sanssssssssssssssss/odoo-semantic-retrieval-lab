@@ -30,6 +30,10 @@ remain diagnostic only; none of them promote a retriever.
 .\lab.ps1 p5
 .\lab.ps1 tune-e2
 .\lab.ps1 tune-e3
+.\lab.ps1 v0-bootstrap
+.\lab.ps1 v0-validate --annotator annotator_a --submission <completed.jsonl>
+.\lab.ps1 v0-adjudicate --annotator-a <a.jsonl> --annotator-b <b.jsonl>
+.\lab.ps1 v0-validate-adjudication --root <private-root> --submission <adjudicator.jsonl> --annotator-a <a.jsonl> --annotator-b <b.jsonl>
 .\lab.ps1 all -Profile seed
 ```
 
@@ -39,6 +43,18 @@ BGE query-encoder comparisons. `tune-e3` uses the isolated GPU environment to co
 cross-encoder candidate pools 10/20/50 and the preregistered sequence-length ablation. Both
 commands write hash-bound local receipts under `artifacts/tuning/`; Seed50 remains provisional,
 so a passing screen only earns evaluation on the future V0 benchmark.
+
+`v0-bootstrap` starts that V0 work without creating Agent-authored gold. It freezes 160 empty
+human-authored topic slots (96 public dev, 64 ignored shadow-hidden), canonicalizes the 9,185
+chunk-level Seed review rows into 6,439 exact query/source-span groups, and emits a 20-item blind
+tooling-calibration packet. The packet is Seed50 workflow validation only, not part of V0 gold.
+Annotators see only query text and canonical evidence: sampling reasons, provisional answerability,
+nuggets, and Agent labels remain in a hash-bound local audit receipt. `v0-validate` fail-closes
+completed A/B submissions against the packet and evidence IDs. `v0-adjudicate` is the only way to
+create adjudicator input; it first validates both mutually hidden A/B submissions and then writes a
+disagreement-only packet under `.private/v0/` bound to both hashes.
+Hidden topic content may only exist under the gitignored `.private/v0/` store; public files contain
+only a count and hash commitment.
 
 Every cross-stage command is receipt-gated. `all -Profile seed` checks every Agent approval before
 its first write and returns an explicit `agent_provisional_complete_human_review_pending` state when

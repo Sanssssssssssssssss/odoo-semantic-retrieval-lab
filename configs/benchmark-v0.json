@@ -1,0 +1,128 @@
+{
+  "annotation": {
+    "adjudication": "all_disagreements",
+    "agent_final_gold_allowed": false,
+    "independent_human_annotators": 2,
+    "unjudged_is_nonrelevant": false
+  },
+  "benchmark_id": "odoo19-applications-v0",
+  "hidden": {
+    "forbidden_public_fields": [
+      "judgments",
+      "nuggets",
+      "query_text",
+      "source_span_ids"
+    ],
+    "private_relative_root": ".private/v0",
+    "public_content_allowed": false
+  },
+  "pooling": {
+    "canonical_key": [
+      "query_id",
+      "source_span_ids"
+    ],
+    "depths": [
+      20,
+      30,
+      40,
+      50
+    ],
+    "stable_grade_2_or_3_yield_max": 0.01,
+    "stable_leave_one_run_out_kendall_tau_min": 0.95
+  },
+  "schema_version": 1,
+  "source_snapshot_id": "32a8b8d77833f22b4bc74ed4ea78b6a82b5338fd",
+  "status": "contract_frozen_topic_content_pending_human_annotation",
+  "tooling_calibration": {
+    "items": 20,
+    "selection_reason_counts": {
+      "agent_disagreement": 10,
+      "no_answer": 5,
+      "stratified_agreement_sample": 5
+    },
+    "source": "seed50-provisional-human-review",
+    "v0_gold": false
+  },
+  "topics": {
+    "answerability_by_split": {
+      "dev": {
+        "answerable": 77,
+        "no_answer": 19
+      },
+      "shadow_hidden": {
+        "answerable": 51,
+        "no_answer": 13
+      }
+    },
+    "calibration_dev_topics": 20,
+    "difficulty_by_split": {
+      "dev": {
+        "easy": 24,
+        "hard": 24,
+        "medium": 48
+      },
+      "shadow_hidden": {
+        "easy": 16,
+        "hard": 16,
+        "medium": 32
+      }
+    },
+    "evidence_topology_by_split": {
+      "dev": {
+        "cross_page": 8,
+        "same_page_multi_span": 19,
+        "single_span": 50
+      },
+      "shadow_hidden": {
+        "cross_page": 5,
+        "same_page_multi_span": 13,
+        "single_span": 33
+      }
+    },
+    "intent_by_split": {
+      "dev": {
+        "action_semantics": 11,
+        "comparison": 10,
+        "cross_module": 11,
+        "diagnosis": 11,
+        "exact_identifier": 11,
+        "ordered_procedure": 16,
+        "prerequisite": 16,
+        "version_applicability": 10
+      },
+      "shadow_hidden": {
+        "action_semantics": 8,
+        "comparison": 6,
+        "cross_module": 8,
+        "diagnosis": 8,
+        "exact_identifier": 8,
+        "ordered_procedure": 10,
+        "prerequisite": 10,
+        "version_applicability": 6
+      }
+    },
+    "no_answer_reason_by_split": {
+      "dev": {
+        "absent_from_corpus": 4,
+        "ambiguous_requires_clarification": 3,
+        "enterprise_or_excluded": 3,
+        "out_of_scope": 3,
+        "requires_live_instance": 3,
+        "wrong_version": 3
+      },
+      "shadow_hidden": {
+        "absent_from_corpus": 2,
+        "ambiguous_requires_clarification": 2,
+        "enterprise_or_excluded": 2,
+        "out_of_scope": 2,
+        "requires_live_instance": 3,
+        "wrong_version": 2
+      }
+    },
+    "split_counts": {
+      "dev": 96,
+      "shadow_hidden": 64
+    },
+    "total": 160
+  }
+}

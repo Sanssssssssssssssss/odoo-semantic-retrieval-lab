@@ -198,6 +198,65 @@
         "smoke": {"type": "boolean"}, "smoke_slice": {"$ref": "#/$defs/Query/properties/smoke_slice"}
       }
     },
+    "V0TopicSlot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "split", "calibration", "intent", "difficulty", "answerability", "no_answer_reason", "evidence_topology", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^v0-[0-9]{3}$"}, "schema_version": {"const": 1},
+        "split": {"enum": ["dev", "shadow_hidden"]}, "calibration": {"type": "boolean"},
+        "intent": {"$ref": "#/$defs/Query/properties/intent"}, "difficulty": {"enum": ["easy", "medium", "hard"]},
+        "answerability": {"$ref": "#/$defs/Query/properties/answerability"},
+        "no_answer_reason": {"$ref": "#/$defs/Query/properties/no_answer_reason"},
+        "evidence_topology": {"$ref": "#/$defs/Query/properties/evidence_topology"},
+        "status": {"const": "empty_human_authored_required"}
+      }
+    },
+    "CanonicalReviewIndex": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "query_id", "source_span_ids", "selection_reasons", "pool_item_ids", "chunk_config_ids", "minimum_depth"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "query_id": {"type": "string"},
+        "source_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "selection_reasons": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["agent_disagreement", "no_answer", "stratified_agreement_sample"]}},
+        "pool_item_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "chunk_config_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "minimum_depth": {"type": "integer", "minimum": 20, "maximum": 50}
+      }
+    },
+    "ReviewEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_span_id", "evidence_unit_id", "source_uri", "heading_path", "node_type", "text"],
+      "properties": {
+        "source_span_id": {"type": "string"}, "evidence_unit_id": {"type": "string"}, "source_uri": {"type": "string"},
+        "heading_path": {"type": "array", "items": {"type": "string"}}, "node_type": {"type": "string"},
+        "text": {"type": "string", "minLength": 1}
+      }
+    },
+    "ReviewPacketItem": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "packet_id", "query_id", "query_text", "source_span_ids", "evidence", "alias_count", "chunk_config_ids", "status"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "packet_id": {"type": "string"},
+        "query_id": {"type": "string"}, "query_text": {"type": "string", "minLength": 1},
+        "source_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ReviewEvidence"}},
+        "alias_count": {"type": "integer", "minimum": 1},
+        "chunk_config_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "status": {"const": "tooling_calibration_only_not_v0_gold"}
+      }
+    },
+    "ReviewSubmission": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "schema_version", "packet_id", "canonical_item_id", "annotator_id", "status", "retrieval_grade", "selected_source_span_ids", "topic_issue", "rationale"],
+      "properties": {
+        "id": {"type": "string"}, "schema_version": {"const": 1}, "packet_id": {"type": "string"},
+        "canonical_item_id": {"type": "string"}, "annotator_id": {"enum": ["annotator_a", "annotator_b", "adjudicator"]},
+        "status": {"enum": ["PENDING", "SUBMITTED"]}, "retrieval_grade": {"type": ["integer", "null"], "minimum": 0, "maximum": 3},
+        "selected_source_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "topic_issue": {"enum": [null, "query_contract_issue", "source_span_contract_issue"]},
+        "rationale": {"type": "string"}
+      }
+    },
     "HardNegative": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "schema_version", "query_id", "source_span_id", "grade", "provenance", "status"],

@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from .baselines import run_provisional_matrix
 from .chunking import chunk_twice
@@ -18,6 +19,12 @@ from .receipts import create_environment_receipt
 from .smoke import run_smoke
 from .tuning import run_e2_tuning, run_e3_tuning
 from .verify import verify_source
+from .v0 import (
+    prepare_calibration_adjudication,
+    run_v0_bootstrap,
+    validate_calibration_adjudication,
+    validate_calibration_submission,
+)
 
 
 COMMANDS = (
@@ -31,6 +38,10 @@ COMMANDS = (
     "p5",
     "tune-e2",
     "tune-e3",
+    "v0-bootstrap",
+    "v0-validate",
+    "v0-adjudicate",
+    "v0-validate-adjudication",
     "all",
 )
 SEED_APPROVALS = (
@@ -62,6 +73,17 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--cold-processes", type=int, default=5)
         if command == "all":
             child.add_argument("--profile", default="seed", choices=("seed",))
+        if command == "v0-validate":
+            child.add_argument("--annotator", required=True, choices=("annotator_a", "annotator_b"))
+            child.add_argument("--submission", required=True, type=Path)
+        if command == "v0-adjudicate":
+            child.add_argument("--annotator-a", required=True, type=Path)
+            child.add_argument("--annotator-b", required=True, type=Path)
+        if command == "v0-validate-adjudication":
+            child.add_argument("--root", required=True, type=Path)
+            child.add_argument("--submission", required=True, type=Path)
+            child.add_argument("--annotator-a", required=True, type=Path)
+            child.add_argument("--annotator-b", required=True, type=Path)
     return parser
 
 
@@ -182,6 +204,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "tune-e3":
         print(json.dumps(run_e3_tuning(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "v0-bootstrap":
+        print(json.dumps(run_v0_bootstrap(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "v0-validate":
+        print(
+            json.dumps(
+                validate_calibration_submission(args.submission, args.annotator, paths),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "v0-adjudicate":
+        print(
+            json.dumps(
+                prepare_calibration_adjudication(args.annotator_a, args.annotator_b, paths),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "v0-validate-adjudication":
+        print(
+            json.dumps(
+                validate_calibration_adjudication(
+                    args.root,
+                    args.submission,
+                    args.annotator_a,
+                    args.annotator_b,
+                    paths,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return 0
     if args.command == "all":
         print(json.dumps(run_seed_pipeline(paths, result), indent=2, ensure_ascii=False))
