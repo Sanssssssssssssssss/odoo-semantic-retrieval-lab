@@ -64,7 +64,18 @@ def _verify_manifest_outputs(directory: Path) -> dict[str, Any]:
 def _rank(scores: np.ndarray, chunk_ids: list[str], top_k: int) -> list[int]:
     if scores.shape != (len(chunk_ids),):
         raise RuntimeError("BM25 returned an unexpected score vector")
-    return np.lexsort((np.asarray(chunk_ids), -scores))[:top_k].tolist()
+    count = min(top_k, len(chunk_ids))
+    ids = np.asarray(chunk_ids)
+    if count == len(chunk_ids):
+        return np.lexsort((ids, -scores)).tolist()
+    cutoff = np.partition(scores, len(scores) - count)[len(scores) - count]
+    above = np.flatnonzero(scores > cutoff)
+    tied = np.flatnonzero(scores == cutoff)
+    needed = count - len(above)
+    if needed:
+        tied = tied[np.argsort(ids[tied], kind="stable")[:needed]]
+    candidates = np.concatenate((above, tied))
+    return candidates[np.lexsort((ids[candidates], -scores[candidates]))].tolist()
 
 
 def _lexical_chunk_text(

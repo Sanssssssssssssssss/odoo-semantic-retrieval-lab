@@ -103,6 +103,7 @@ def _launch_worker(
     output: Path,
     run_id: str,
     index_root: Path | None = None,
+    worker_args: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     environment = os.environ.copy()
     environment.update(
@@ -110,6 +111,7 @@ def _launch_worker(
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "TOKENIZERS_PARALLELISM": "false",
+            "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
         }
     )
     if index_root is not None:
@@ -126,6 +128,7 @@ def _launch_worker(
         str(output),
         "--run-id",
         run_id,
+        *worker_args,
     ]
     process = subprocess.Popen(
         command,

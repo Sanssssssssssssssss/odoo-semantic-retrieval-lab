@@ -8,6 +8,7 @@ import numpy as np
 from docutils import nodes
 
 import osrlab.cli as cli
+import osrlab.p5 as p5
 
 from osrlab.contract import validate_record
 from osrlab.baselines import (
@@ -35,6 +36,7 @@ from osrlab.pooling import (
     _true_sibling_headings,
 )
 from osrlab.performance import _framework_overhead, _percentiles, _runtime_initialization_ns
+from osrlab.p5 import _matches
 from osrlab.diagnostics import _answerability_cv, _auc_ap, _holm, _ndcg10
 from osrlab.smoke import _lexical_chunk_text, _rank, assemble_evidence_cards, evaluate_ranking
 
@@ -43,6 +45,7 @@ def test_path_allowlist_rejects_source_and_external_paths(tmp_path: Path) -> Non
     root = tmp_path / "lab"
     paths = LabPaths(root)
     assert paths.require_write_path("artifacts/run.json") == (root / "artifacts/run.json").resolve()
+    assert paths.require_write_path(".venv-gpu/receipt.json") == (root / ".venv-gpu/receipt.json").resolve()
     with pytest.raises(PathBoundaryError):
         paths.require_write_path(root.parent / "erp-openai" / "result.json")
     with pytest.raises(PathBoundaryError):
@@ -259,6 +262,7 @@ def test_seed50_topic_briefs_match_preregistered_distribution() -> None:
 
 def test_bm25_ties_are_broken_by_chunk_id() -> None:
     assert _rank(np.asarray([1.0, 1.0, 2.0], dtype=np.float32), ["b", "a", "c"], 3) == [2, 1, 0]
+    assert _rank(np.asarray([1.0, 1.0, 2.0], dtype=np.float32), ["b", "a", "c"], 2) == [2, 1]
 
 
 def test_ir_metrics_golden_fixture_uses_grade_two_binary_threshold() -> None:
@@ -556,6 +560,74 @@ def test_performance_cold_load_includes_full_runtime_initialization() -> None:
     old_receipt = {"resource_samples": [{"monotonic_ns": 100}, {"monotonic_ns": 350}]}
     assert _runtime_initialization_ns(old_receipt) == 250
     assert _runtime_initialization_ns({"runtime_initialization_duration_ns": 400}) == 400
+
+
+def test_p5_resume_receipt_requires_exact_execution_profile() -> None:
+    receipt = {
+        "run_id": "run",
+        "chunk_config": "C2-structure-bounded",
+        "system": "E2-hybrid-rrf",
+        "mode": "warm",
+        "device": "cuda",
+        "dtype": "float16",
+        "concurrency": 4,
+        "minimum_requests": 50,
+        "minimum_seconds": 1,
+        "measured_loop_duration_ns": 1_000_000_000,
+        "external_peak_process_tree_rss_bytes": 1,
+        "requests": [{"query_id": f"q{index}"} for index in range(50)],
+    }
+    assert _matches(
+        receipt,
+        "run",
+        "C2-structure-bounded",
+        "E2-hybrid-rrf",
+        "warm",
+        "cuda",
+        "float16",
+        4,
+        50,
+        1,
+    )
+    assert not _matches(
+        receipt,
+        "run",
+        "C3-structure-merged",
+        "E2-hybrid-rrf",
+        "warm",
+        "cuda",
+        "float16",
+        4,
+        50,
+        1,
+    )
+    insufficient = {**receipt, "requests": receipt["requests"][:-1]}
+    assert not _matches(
+        insufficient,
+        "run",
+        "C2-structure-bounded",
+        "E2-hybrid-rrf",
+        "warm",
+        "cuda",
+        "float16",
+        4,
+        50,
+        1,
+    )
+
+
+def test_p5_failure_updates_progress(monkeypatch, tmp_path: Path) -> None:
+    paths = LabPaths(tmp_path)
+    root = tmp_path / "artifacts" / "performance" / "p5" / "run"
+    active = tmp_path / "artifacts" / "performance" / "p5" / "active.json"
+    write_json(root / "progress.json", {"run_id": "run", "status": "running"}, paths)
+    write_json(active, {"run_id": "run", "root": str(root), "status": "running"}, paths)
+    monkeypatch.setattr(p5, "_run_p5_impl", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        p5.run_p5(paths, minimum_seconds=1, minimum_requests=50, cold_processes=1)
+    progress = json.loads((root / "progress.json").read_text(encoding="utf-8"))
+    assert progress["status"] == "failed"
+    assert progress["error_type"] == "RuntimeError"
 
 
 def test_all_seed_runs_only_after_every_agent_approval(monkeypatch, tmp_path: Path) -> None:

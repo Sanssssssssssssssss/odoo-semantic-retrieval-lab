@@ -28,7 +28,17 @@ class LabPaths:
     def allowed_write_roots(self) -> tuple[Path, ...]:
         return tuple(
             (self.root / name).resolve()
-            for name in (".venv", ".cache", ".tools", "artifacts", "indexes", "benchmarks", "reviews", "corpus/derived")
+            for name in (
+                ".venv",
+                ".venv-gpu",
+                ".cache",
+                ".tools",
+                "artifacts",
+                "indexes",
+                "benchmarks",
+                "reviews",
+                "corpus/derived",
+            )
         )
 
     def require_write_path(self, candidate: str | Path) -> Path:

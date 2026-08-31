@@ -11,6 +11,7 @@ from .diagnostics import run_diagnostics
 from .extraction import extract_twice
 from .gates import require_approval
 from .paths import LabPaths
+from .p5 import run_p5
 from .performance import run_performance
 from .pooling import build_pool
 from .receipts import create_environment_receipt
@@ -18,7 +19,7 @@ from .smoke import run_smoke
 from .verify import verify_source
 
 
-COMMANDS = ("verify", "extract", "chunk", "smoke", "baseline", "pool", "perf", "all")
+COMMANDS = ("verify", "extract", "chunk", "smoke", "baseline", "pool", "perf", "p5", "all")
 SEED_APPROVALS = (
     "p0",
     "p1a",
@@ -42,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("verify", help="Verify isolation and pinned source")
     for command in COMMANDS[1:]:
         child = subparsers.add_parser(command)
+        if command == "p5":
+            child.add_argument("--minimum-seconds", type=int, default=60)
+            child.add_argument("--minimum-requests", type=int, default=1024)
+            child.add_argument("--cold-processes", type=int, default=5)
         if command == "all":
             child.add_argument("--profile", default="seed", choices=("seed",))
     return parser
@@ -144,6 +149,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "perf":
         print(json.dumps(run_performance(paths), indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "p5":
+        print(
+            json.dumps(
+                run_p5(
+                    paths,
+                    minimum_seconds=args.minimum_seconds,
+                    minimum_requests=args.minimum_requests,
+                    cold_processes=args.cold_processes,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return 0
     if args.command == "all":
         print(json.dumps(run_seed_pipeline(paths, result), indent=2, ensure_ascii=False))

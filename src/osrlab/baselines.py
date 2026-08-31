@@ -142,6 +142,7 @@ def _window_texts(
 
 
 def _encode_bge(model: Any, tokenizer: Any, texts: list[str], batch_size: int = 64) -> np.ndarray:
+    device = next(model.parameters()).device
     output: list[np.ndarray] = []
     for start in range(0, len(texts), batch_size):
         batch = tokenizer(
@@ -151,6 +152,7 @@ def _encode_bge(model: Any, tokenizer: Any, texts: list[str], batch_size: int = 
             max_length=512,
             return_tensors="pt",
         )
+        batch = {key: value.to(device) for key, value in batch.items()}
         with torch.inference_mode():
             embeddings = model(**batch).last_hidden_state[:, 0]
             embeddings = torch_functional.normalize(embeddings, p=2, dim=1)
@@ -216,6 +218,7 @@ def _rerank(
     dense_windows: list[str],
     window_chunk_indices: np.ndarray,
 ) -> dict[str, list[dict[str, Any]]]:
+    device = next(model.parameters()).device
     chunk_index_by_id = {chunk["id"]: index for index, chunk in enumerate(chunks)}
     windows_by_chunk: dict[int, list[int]] = defaultdict(list)
     for window_index, chunk_index in enumerate(window_chunk_indices.tolist()):
@@ -242,6 +245,7 @@ def _rerank(
             max_length=512,
             return_tensors="pt",
         )
+        batch = {key: value.to(device) for key, value in batch.items()}
         with torch.inference_mode():
             logits.append(model(**batch).logits.reshape(-1).cpu().numpy().astype(np.float32, copy=False))
     window_scores = np.concatenate(logits)

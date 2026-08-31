@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -39,7 +40,7 @@ SYSTEMS = ("E0-BM25", "E1-dense-exact", "E2-hybrid-rrf", "E3-rerank")
 
 
 def _sync() -> None:
-    if torch.cuda.is_available():
+    if os.environ.get("OSRLAB_SYNC_CUDA") == "1" and torch.cuda.is_available():
         torch.cuda.synchronize()
 
 
@@ -68,9 +69,23 @@ def _resource() -> dict[str, int]:
 
 
 class Runtime:
-    def __init__(self, system: str, timings: dict[str, int]):
+    def __init__(
+        self,
+        system: str,
+        timings: dict[str, int],
+        chunk_config: str = "C2-structure-bounded",
+        device: str = "cpu",
+        dtype: str = "float32",
+    ):
         self.system = system
         self.paths = LabPaths.discover()
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
+        if dtype == "float16" and device != "cuda":
+            raise RuntimeError("float16 is only supported by the CUDA experiment profile")
+        self.device = torch.device(device)
+        self.dtype = dtype
+        self.chunk_config = chunk_config
         self.chunks = _timed(
             timings,
             "load_chunks",
@@ -80,7 +95,7 @@ class Runtime:
                 / "derived"
                 / SNAPSHOT_ID
                 / "chunks"
-                / "C2-structure-bounded"
+                / chunk_config
                 / "chunks.jsonl"
             ),
         )
@@ -97,11 +112,12 @@ class Runtime:
             lambda: AutoTokenizer.from_pretrained(bge_path, local_files_only=True, use_fast=True),
         )
         self.unit_token_counts = _unit_token_counts(self.paths)
+        rss_common_runtime = psutil.Process().memory_info().rss
         configured_index = os.environ.get("OSRLAB_PERF_INDEX_ROOT")
         index = (
             Path(configured_index)
             if configured_index
-            else self.paths.root / "indexes" / SNAPSHOT_ID / "C2-structure-bounded"
+            else self.paths.root / "indexes" / SNAPSHOT_ID / chunk_config
         )
         self.window_chunk_indices = _timed(
             timings,
@@ -132,10 +148,14 @@ class Runtime:
                     allow_pickle=False,
                 ),
             )
+        rss_after_indexes = psutil.Process().memory_info().rss
+        if system in ("E1-dense-exact", "E2-hybrid-rrf", "E3-rerank"):
             self.bge = _timed(
                 timings,
                 "load_bge_model",
-                lambda: AutoModel.from_pretrained(bge_path, local_files_only=True).eval(),
+                lambda: self._place_model(
+                    AutoModel.from_pretrained(bge_path, local_files_only=True)
+                ),
             )
         if system == "E3-rerank":
             reranker_path = _snapshot_dir(self.paths, _model_spec(self.paths, RERANKER_KEY))
@@ -149,10 +169,14 @@ class Runtime:
             self.reranker = _timed(
                 timings,
                 "load_reranker_model",
-                lambda: AutoModelForSequenceClassification.from_pretrained(
-                    reranker_path, local_files_only=True
-                ).eval(),
+                lambda: self._place_model(
+                    AutoModelForSequenceClassification.from_pretrained(
+                        reranker_path, local_files_only=True
+                    )
+                ),
             )
+        rss_after_models = psutil.Process().memory_info().rss
+        if system == "E3-rerank":
             self.dense_windows = _timed(
                 timings,
                 "materialize_rerank_windows",
@@ -163,6 +187,19 @@ class Runtime:
                     self.tokenizer,
                 )[1],
             )
+        rss_ready = psutil.Process().memory_info().rss
+        self.memory_breakdown = {
+            "common_runtime_rss_bytes": rss_common_runtime,
+            "index_resident_rss_delta_bytes": max(0, rss_after_indexes - rss_common_runtime),
+            "model_resident_rss_delta_bytes": max(0, rss_after_models - rss_after_indexes),
+            "rerank_context_rss_delta_bytes": max(0, rss_ready - rss_after_models),
+            "ready_rss_bytes": rss_ready,
+        }
+        self.chunk_by_id = {chunk["id"]: chunk for chunk in self.chunks}
+
+    def _place_model(self, model: Any) -> Any:
+        model = model.eval().to(self.device)
+        return model.half() if self.dtype == "float16" else model.float()
 
     def _sparse_rank(self, query: dict[str, Any], timings: dict[str, int]) -> list[dict[str, Any]]:
         tokens = _timed(
@@ -205,8 +242,12 @@ class Runtime:
             for rank, index in enumerate(indices, 1)
         ]
 
-    def query(self, query: dict[str, Any]) -> tuple[dict[str, int], list[str], int]:
+    def query(
+        self, query: dict[str, Any]
+    ) -> tuple[dict[str, int], list[str], int, float, int]:
         timings: dict[str, int] = {}
+        _sync()
+        retrieval_started = time.perf_counter_ns()
         sparse = self._sparse_rank(query, timings) if self.sparse is not None else None
         dense = self._dense_rank(query, timings) if self.embeddings is not None else None
         if self.system == "E0-BM25":
@@ -233,21 +274,42 @@ class Runtime:
                     self.window_chunk_indices,
                 )[query["id"]],
             )
+        _sync()
+        retrieval_duration_ns = time.perf_counter_ns() - retrieval_started
         cards = _timed(
             timings,
             "evidence_card_assembly",
             lambda: assemble_evidence_cards(
                 query["id"],
                 ranking,
-                {chunk["id"]: chunk for chunk in self.chunks},
+                self.chunk_by_id,
                 self.units,
                 tokenizer=self.tokenizer,
             )[0],
         )
-        return timings, [item["chunk_id"] for item in ranking[:10]], sum(card["token_count"] for card in cards)
+        return (
+            timings,
+            [item["chunk_id"] for item in ranking[:10]],
+            sum(card["token_count"] for card in cards),
+            float(ranking[0]["score"]),
+            retrieval_duration_ns,
+        )
 
 
-def run_queries(system: str, mode: str, output: Path, run_id: str) -> dict[str, Any]:
+def run_queries(
+    system: str,
+    mode: str,
+    output: Path,
+    run_id: str,
+    *,
+    chunk_config: str = "C2-structure-bounded",
+    device: str = "cpu",
+    dtype: str = "float32",
+    concurrency: int = 1,
+    minimum_requests: int = 1024,
+    minimum_seconds: int = 60,
+) -> dict[str, Any]:
+    os.environ["OSRLAB_SYNC_CUDA"] = "1" if device == "cuda" else "0"
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
     torch.set_num_threads(1)
@@ -256,7 +318,7 @@ def run_queries(system: str, mode: str, output: Path, run_id: str) -> dict[str, 
     load_timings: dict[str, int] = {}
     resources = [_resource()]
     runtime_started = time.perf_counter_ns()
-    runtime = Runtime(system, load_timings)
+    runtime = Runtime(system, load_timings, chunk_config, device, dtype)
     runtime_initialization_duration_ns = time.perf_counter_ns() - runtime_started
     resources.append(_resource())
     query_path = runtime.paths.root / "benchmarks" / "seed50" / "provisional" / "queries.jsonl"
@@ -267,14 +329,16 @@ def run_queries(system: str, mode: str, output: Path, run_id: str) -> dict[str, 
             torch.cuda.reset_peak_memory_stats()
         query = queries[0]
         started = time.perf_counter_ns()
-        timings, top10, card_tokens = runtime.query(query)
+        timings, top10, card_tokens, top_score, retrieval_ns = runtime.query(query)
         requests.append(
             {
                 "sequence": 1,
                 "query_id": query["id"],
                 "total_duration_ns": time.perf_counter_ns() - started,
                 "stage_durations_ns": timings,
+                "retrieval_duration_ns": retrieval_ns,
                 "top10_chunk_ids": top10,
+                "top_score": top_score,
                 "evidence_card_tokens": card_tokens,
             }
         )
@@ -285,22 +349,45 @@ def run_queries(system: str, mode: str, output: Path, run_id: str) -> dict[str, 
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
         started_loop = time.perf_counter_ns()
-        sequence = 0
-        while sequence < 1024 or time.perf_counter_ns() - started_loop < 60_000_000_000:
-            query = queries[sequence % len(queries)]
-            started = time.perf_counter_ns()
-            timings, top10, card_tokens = runtime.query(query)
-            sequence += 1
-            requests.append(
-                {
-                    "sequence": sequence,
-                    "query_id": query["id"],
-                    "total_duration_ns": time.perf_counter_ns() - started,
-                    "stage_durations_ns": timings,
-                    "top10_chunk_ids": top10,
-                    "evidence_card_tokens": card_tokens,
-                }
-            )
+
+        def execute(sequence: int, query: dict[str, Any], submitted_ns: int) -> dict[str, Any]:
+            started_ns = time.perf_counter_ns()
+            timings, top10, card_tokens, top_score, retrieval_ns = runtime.query(query)
+            finished_ns = time.perf_counter_ns()
+            return {
+                "sequence": sequence,
+                "query_id": query["id"],
+                "total_duration_ns": finished_ns - submitted_ns,
+                "service_duration_ns": finished_ns - started_ns,
+                "queue_duration_ns": started_ns - submitted_ns,
+                "retrieval_duration_ns": retrieval_ns,
+                "stage_durations_ns": timings,
+                "top10_chunk_ids": top10,
+                "top_score": top_score,
+                "evidence_card_tokens": card_tokens,
+            }
+
+        submitted = 0
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            pending = set()
+
+            def submit_one() -> None:
+                nonlocal submitted
+                submitted += 1
+                query = queries[(submitted - 1) % len(queries)]
+                submitted_ns = time.perf_counter_ns()
+                pending.add(executor.submit(execute, submitted, query, submitted_ns))
+
+            for _ in range(concurrency):
+                submit_one()
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                requests.extend(future.result() for future in done)
+                elapsed = time.perf_counter_ns() - started_loop
+                if len(requests) < minimum_requests or elapsed < minimum_seconds * 1_000_000_000:
+                    for _ in done:
+                        submit_one()
+        requests.sort(key=lambda row: row["sequence"])
         loop_duration_ns = time.perf_counter_ns() - started_loop
         resources.append(_resource())
     receipt = {
@@ -308,15 +395,21 @@ def run_queries(system: str, mode: str, output: Path, run_id: str) -> dict[str, 
         "run_id": run_id,
         "system": system,
         "mode": mode,
-        "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "chunk_config": chunk_config,
+        "device": device,
+        "dtype": dtype,
+        "concurrency": concurrency,
         "torch_version": torch.__version__,
         "torch_cuda_version": torch.version.cuda,
         "deterministic_algorithms": True,
         "omp_num_threads": os.environ["OMP_NUM_THREADS"],
         "mkl_num_threads": os.environ["MKL_NUM_THREADS"],
         "load_stage_durations_ns": load_timings,
+        "runtime_memory_breakdown": runtime.memory_breakdown,
         "runtime_initialization_duration_ns": runtime_initialization_duration_ns,
         "warmup_requests": 0 if mode == "cold" else 20,
+        "minimum_requests": minimum_requests,
+        "minimum_seconds": minimum_seconds,
         "measured_loop_duration_ns": None if mode == "cold" else loop_duration_ns,
         "peak_torch_allocated_vram_bytes": int(torch.cuda.max_memory_allocated())
         if torch.cuda.is_available()
@@ -441,11 +534,32 @@ def main() -> int:
     parser.add_argument("--mode", choices=("cold", "warm", "build"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument(
+        "--chunk-config",
+        choices=("C2-structure-bounded", "C3-structure-merged"),
+        default="C2-structure-bounded",
+    )
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--dtype", choices=("float32", "float16"), default="float32")
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--minimum-requests", type=int, default=1024)
+    parser.add_argument("--minimum-seconds", type=int, default=60)
     args = parser.parse_args()
     result = (
         run_build(args.output, args.run_id)
         if args.mode == "build"
-        else run_queries(args.system, args.mode, args.output, args.run_id)
+        else run_queries(
+            args.system,
+            args.mode,
+            args.output,
+            args.run_id,
+            chunk_config=args.chunk_config,
+            device=args.device,
+            dtype=args.dtype,
+            concurrency=args.concurrency,
+            minimum_requests=args.minimum_requests,
+            minimum_seconds=args.minimum_seconds,
+        )
     )
     print(json.dumps({"system": args.system, "mode": args.mode, "requests": len(result.get("requests", []))}))
     return 0
